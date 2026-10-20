@@ -328,3 +328,10 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .dend-g { width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 14px; padding: 10px; margin: 6px 0; background: var(--card); font-size: 15px; color: var(--fg); }
 .pk-cat .field { margin: 8px 0 0; }
 .pk-cat .field input { color-scheme: dark; }
+.chip.owe { border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); }
+.chip.owe.on { background: var(--bad); border-color: var(--bad); color: #fff; }
+.owedbar { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.owedbar .seg { display: flex; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 3px; }
+.owedbar .seg button { flex: 1; padding: 8px; border-radius: 9px; font: inherit; font-size: 14px; font-weight: 600; color: var(--muted); background: none; border: 0; }
+.owedbar .seg button.on { background: var(--bg2, #26262a); color: var(--fg); }
+.owedbar .muted { font-size: 13px; padding: 0 2px; }

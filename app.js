@@ -596,10 +596,33 @@ function rangeBar(rerender) {
     ? h('button', { type: 'button', class: 'dfield dend', onclick: () => pickEnd(range.to, range.live, (d, l) => set({ from: range.from, to: d }, l)) }, h('span', {}, 'To'), h('b', {}, endText(range.to, range.live)))
     : h('label', { class: 'dfield' }, h('span', {}, 'From'),
       h('input', { type: 'date', value: range.from, max: todayISO(), onchange: (e) => e.target.value && set({ from: e.target.value, to: range.to }, range.live) }));
+  const owed = (pending) => { range = { ...range, owed: true, pending }; open.clear(); rerender(); };
   return h('div', { class: 'rangebar' },
-    h('div', { class: 'presets' }, rangePresets().map(([label, r]) =>
-      h('button', { class: 'chip' + (r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => set(r) }, label))),
-    h('div', { class: 'range' }, date('from'), date('to')));
+    h('div', { class: 'presets' }, h('button', { class: 'chip owe' + (range.owed ? ' on' : ''), onclick: () => owed(!!range.pending) }, 'Owed on cards'),
+      rangePresets().map(([label, r]) =>
+        h('button', { class: 'chip' + (!range.owed && r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => set(r) }, label))),
+    range.owed
+      ? h('div', { class: 'owedbar' }, h('div', { class: 'seg' },
+          h('button', { class: !range.pending ? 'on' : '', onclick: () => owed(false) }, 'Owed'),
+          h('button', { class: range.pending ? 'on' : '', onclick: () => owed(true) }, 'With pending')),
+        h('div', { class: 'muted small' }, 'The charges making up your current card balances'))
+      : h('div', { class: 'range' }, date('from'), date('to')));
+}
+
+// Charges behind each card's current balance: newest posted charges and refunds until they add up to what's owed.
+const CARD_PAYMENT = new Set(['LOAN_PAYMENTS', 'TRANSFER_IN']);
+function owedTxns(withPending) {
+  const out = [];
+  for (const a of allAccounts().filter((x) => x.type === 'credit')) {
+    const mine = allTxns().filter((t) => t.account_id === a.account_id);
+    let left = a.balances.current || 0;
+    for (const t of mine.filter((t) => !t.pending && !(t.amount < 0 && CARD_PAYMENT.has(t.category))).sort((x, y) => (x.date < y.date ? 1 : -1))) {
+      if (left <= 0.005) break;
+      out.push(t.amount > left ? { ...t, amount: Math.round(left * 100) / 100 } : t); left -= t.amount;
+    }
+    if (withPending) out.push(...mine.filter((t) => t.pending && t.amount > 0));
+  }
+  return out;
 }
 
 // ---------- Breakdowns (categories / merchants / paid with) ----------
@@ -609,9 +632,9 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
   range = range || { ...thisMonthRange(), live: true };
   if (range.live && range.to !== todayISO()) range = { ...range, to: todayISO() };
   const list = spending(), inR = (t, r) => t.date >= r.from && t.date <= r.to;
-  const inRange = list.filter((t) => inR(t, range)), total = inRange.reduce((s, t) => s + t.amount, 0);
+  const inRange = range.owed ? owedTxns(range.pending) : list.filter((t) => inR(t, range)), total = inRange.reduce((s, t) => s + t.amount, 0);
   const days = daysBetween(range.from, range.to) + 1;
-  const prevTotal = list.filter((t) => inR(t, { from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) })).reduce((s, t) => s + t.amount, 0);
+  const prevTotal = range.owed ? 0 : list.filter((t) => inR(t, { from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) })).reduce((s, t) => s + t.amount, 0);
   const diff = prevTotal ? ((total - prevTotal) / prevTotal) * 100 : null;
   setGlow(diff == null ? 0 : -diff);
   el.append(rangeBar(render));
@@ -624,12 +647,12 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
     const top = sorted.slice(0, 7), rest = sorted.slice(7);
     const segs = top.map((g) => ({ v: g.v, color: g.color, on: open.has(g.k) }));
     if (rest.length) segs.push({ v: rest.reduce((s, g) => s + g.v, 0), color: PALETTE[8] });
-    el.append(h('div', { class: 'card hero-card' }, donut(segs, [h('div', { class: 'label' }, 'Spent'), num('donut-num', 'tot' + view + conn, total), diffEl],
+    el.append(h('div', { class: 'card hero-card' }, donut(segs, [h('div', { class: 'label' }, range.owed ? (range.pending ? 'Owed + pending' : 'Owed') : 'Spent'), num('donut-num', 'tot' + view + conn, total), diffEl],
       (i) => top[i] && toggle(top[i].k))));
   } else {
-    el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, 'Spent'), num('hero-num', 'tot' + view + conn, total, true), diffEl));
+    el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, range.owed ? (range.pending ? 'Owed + pending' : 'Owed') : 'Spent'), num('hero-num', 'tot' + view + conn, total, true), diffEl));
   }
-  if (!sorted.length) { el.append(h('div', { class: 'empty small' }, 'Nothing spent in this range')); return; }
+  if (!sorted.length) { el.append(h('div', { class: 'empty small' }, range.owed ? 'Nothing owed on your cards' : 'Nothing spent in this range')); return; }
   const max = sorted[0].v || 1;
   if (layout === 'cards') {
     const grid = h('div', { class: 'cardgrid' });
