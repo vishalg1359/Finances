@@ -381,7 +381,15 @@ function pickCategory(t) {
   ];
   const card = h('div', { class: 'pk-card' }), draw = () => card.replaceChildren(...body());
   const ov = h('div', { class: 'picker', onclick: (e) => { if (e.target === ov) close(); } }, card);
-  draw(); document.body.append(ov);
+  draw(); document.body.append(ov); swipeClose(card, close);
+}
+// Pull a pop-up sheet down from its top to close it.
+function swipeClose(card, close) {
+  card.prepend(h('div', { class: 'pk-grab' }));
+  let y0 = null, dy = 0;
+  card.addEventListener('touchstart', (e) => { y0 = card.scrollTop <= 0 ? e.touches[0].clientY : null; dy = 0; }, { passive: true });
+  card.addEventListener('touchmove', (e) => { if (y0 == null) return; dy = Math.max(0, e.touches[0].clientY - y0); card.style.transform = dy ? `translateY(${dy}px)` : ''; }, { passive: true });
+  card.addEventListener('touchend', () => { if (y0 == null) return; y0 = null; if (dy > 90) close(); else card.style.transform = ''; });
 }
 const toggle = (k) => { open.has(k) ? open.delete(k) : open.add(k); render(); };
 function loadingBanner() {
@@ -431,8 +439,8 @@ function viewOverview(el) {
     h('div', { class: 'tile tap', onclick: () => { const ids = have.filter(isMain).map((a) => a.account_id); openSheet({ title: have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main accounts', graph: { type: 'balance', accts: ids, period: '6M', by: 'week' }, list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => h('button', { class: 'btn small', onclick: () => openPanel('settings') }, 'Choose accounts') }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }),
         have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main'),
       num('tile-num', 'chk' + conn, sum(have.filter(isMain)))),
-    h('div', { class: 'tile tap', onclick: () => { const cards = owe.filter((a) => a.type === 'credit'), ids = cards.map((a) => a.account_id); openSheet({ title: 'Credit cards', graph: { type: 'balance', accts: ids, period: '6M', by: 'week', title: 'Credit card balance' }, list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => split(sum(cards), owePend) }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
-      num('tile-num', 'owe' + conn, sum(owe.filter((a) => a.type === 'credit'))), owePend ? h('div', { class: 'tile-pend' }, '+' + money(owePend, true) + ' pending') : null)));
+    h('div', { class: 'tile tap', onclick: () => { const cards = owe.filter((a) => a.type === 'credit'), ids = cards.map((a) => a.account_id); openSheet({ title: 'Credit cards', list: () => owedTxns(true).filter((t) => ids.includes(t.account_id)), head: () => split(sum(cards), owePend) }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
+      num('tile-num', 'owe' + conn, sum(owe.filter((a) => a.type === 'credit'))), owePend ? h('div', { class: 'tile-pend' }, (owePend < 0 ? '−' : '+') + money(Math.abs(owePend), true) + ' pending') : null)));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
   const pace = paceChart();
@@ -510,7 +518,7 @@ function accountGrid(accs, manual, pendingFor, split) {
       'data-id': t.id, style: `grid-column:span ${w};grid-row:span ${hh}`, onclick },
       h('div', { class: 'atile-top' }, t.mark, h('div', { class: 'atile-name' }, t.name)),
       h('div', { class: 'atile-amt fit' + (t.debt ? ' neg' : '') + (w === 2 ? ' wide' : '') }, money(t.value, w === 2 && !t.perMo), t.perMo ? h('small', { class: 'permo' }, '/mo') : null),
-      t.pend ? h('div', { class: 'pend-amt' }, '+' + money(t.pend, true) + ' pending') : h('div', { class: 'atile-sub' }, t.sub),
+      t.pend ? h('div', { class: 'pend-amt' }, (t.pend < 0 ? '−' : '+') + money(Math.abs(t.pend), true) + ' pending') : h('div', { class: 'atile-sub' }, t.sub),
       hh === 2 ? extra(t) : null,
       editing ? h('button', { class: 'tbtn size', 'aria-label': 'Resize', onclick: (e) => { e.stopPropagation(); const i = SIZES.findIndex(([a, b]) => a === w && b === hh); layout.size[t.id] = SIZES[(i + 1) % SIZES.length]; saveLayout(); draw(); } },
         h('svg', { viewBox: '0 0 24 24', html: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' })) : null,
@@ -587,7 +595,7 @@ function pickEnd(to, live, onPick) {
       h('button', { class: 'pk-cat' + (live ? ' on' : ''), onclick: () => done(todayISO(), true) }, 'Now', h('span', { class: 'muted' }, ' · always runs through today')),
       h('div', { class: 'pk-cat' + (!live ? ' on' : '') }, 'A specific date', h('div', { class: 'field' }, input))));
   const ov = h('div', { class: 'picker', onclick: (e) => { if (e.target === ov) close(); } }, card);
-  document.body.append(ov);
+  document.body.append(ov); swipeClose(card, close);
 }
 const endText = (to, live) => (live ? 'Now' : fullDay(to));
 function rangeBar(rerender) {
@@ -596,17 +604,21 @@ function rangeBar(rerender) {
     ? h('button', { type: 'button', class: 'dfield dend', onclick: () => pickEnd(range.to, range.live, (d, l) => set({ from: range.from, to: d }, l)) }, h('span', {}, 'To'), h('b', {}, endText(range.to, range.live)))
     : h('label', { class: 'dfield' }, h('span', {}, 'From'),
       h('input', { type: 'date', value: range.from, max: todayISO(), onchange: (e) => e.target.value && set({ from: e.target.value, to: range.to }, range.live) }));
-  const owed = (pending) => { range = { ...range, owed: true, pending }; open.clear(); rerender(); };
   return h('div', { class: 'rangebar' },
-    h('div', { class: 'presets' }, h('button', { class: 'chip owe' + (range.owed ? ' on' : ''), onclick: () => owed(!!range.pending) }, 'Owed on cards'),
-      rangePresets().map(([label, r]) =>
-        h('button', { class: 'chip' + (!range.owed && r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => set(r) }, label))),
-    range.owed
-      ? h('div', { class: 'owedbar' }, h('div', { class: 'seg' },
-          h('button', { class: !range.pending ? 'on' : '', onclick: () => owed(false) }, 'Owed'),
-          h('button', { class: range.pending ? 'on' : '', onclick: () => owed(true) }, 'With pending')),
-        h('div', { class: 'muted small' }, 'The charges making up your current card balances'))
-      : h('div', { class: 'range' }, date('from'), date('to')));
+    h('div', { class: 'presets' }, rangePresets().map(([label, r]) =>
+      h('button', { class: 'chip' + (r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => set(r) }, label))),
+    h('div', { class: 'range' }, date('from'), date('to')));
+}
+// Spending tabs can switch to the charges behind what's owed on cards now (same list as the You owe tile).
+function modeBar(rerender) {
+  const go = (owed, pending = !!range.pending) => { range = { ...range, owed, pending }; open.clear(); rerender(); };
+  return h('div', { class: 'modebar' },
+    range.owed ? h('div', { class: 'seg small' },
+      h('button', { class: !range.pending ? 'on' : '', onclick: () => go(true, false) }, 'Posted'),
+      h('button', { class: range.pending ? 'on' : '', onclick: () => go(true, true) }, '+ Pending')) : h('div', { class: 'grow' }),
+    h('div', { class: 'seg small' },
+      h('button', { class: !range.owed ? 'on' : '', onclick: () => go(false) }, 'Spending'),
+      h('button', { class: range.owed ? 'on owe' : '', onclick: () => go(true) }, 'Owed on cards')));
 }
 
 // Charges behind each card's current balance: newest posted charges and refunds until they add up to what's owed.
@@ -620,7 +632,7 @@ function owedTxns(withPending) {
       if (left <= 0.005) break;
       out.push(t.amount > left ? { ...t, amount: Math.round(left * 100) / 100 } : t); left -= t.amount;
     }
-    if (withPending) out.push(...mine.filter((t) => t.pending && t.amount > 0));
+    if (withPending) out.push(...mine.filter((t) => t.pending));
   }
   return out;
 }
@@ -637,7 +649,8 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
   const prevTotal = range.owed ? 0 : list.filter((t) => inR(t, { from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) })).reduce((s, t) => s + t.amount, 0);
   const diff = prevTotal ? ((total - prevTotal) / prevTotal) * 100 : null;
   setGlow(diff == null ? 0 : -diff);
-  el.append(rangeBar(render));
+  el.append(modeBar(render));
+  if (!range.owed) el.append(rangeBar(render));
   const groups = {};
   for (const t of inRange) (groups[keyOf(t)] = groups[keyOf(t)] || []).push(t);
   const sorted = Object.entries(groups).map(([k, l]) => ({ k, l, v: l.reduce((s, t) => s + t.amount, 0) })).filter((g) => Math.abs(g.v) > 0.005).sort((a, b) => b.v - a.v);
