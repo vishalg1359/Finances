@@ -325,26 +325,37 @@ function viewOverview(el) {
   el.append(h('section', { class: 'hero-block' }, heroNum, change, chart,
     full.length > 2 ? h('div', { class: 'periods' }, PERIODS.map(([label, n]) => h('button', { class: 'period' + (n === histDays ? ' on' : ''),
       onclick: () => { histDays = n; store.set('histDays', n); render(); } }, label))) : null));
+  const pendingFor = (a) => allTxns().filter((t) => t.pending && t.account_id === a.account_id).sort((x, y) => (x.date < y.date ? 1 : -1));
+  const pendSum = (a) => pendingFor(a).reduce((s, t) => s + t.amount, 0);
+  const owePend = owe.filter((a) => a.type === 'credit').reduce((s, a) => s + pendSum(a), 0);
   el.append(h('div', { class: 'tiles' },
     h('div', { class: 'tile tap', onclick: () => openPanel('settings') }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }),
         have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main'),
       num('tile-num', 'chk' + conn, sum(have.filter(isMain)))),
     h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
-      num('tile-num', 'owe' + conn, oweTotal))));
+      num('tile-num', 'owe' + conn, oweTotal), owePend ? h('div', { class: 'tile-pend' }, '+' + money(owePend, true) + ' pending') : null)));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
   el.append(h('div', { class: 'card tap spendcard', onclick: () => showView('categories') },
     h('div', { class: 'label' }, 'Spent this month'), num('big', 'spent' + conn, spent, true),
     lastSpent ? h('div', { class: 'meter' }, h('i', { style: `width:${Math.min(100, (spent / lastSpent) * 100)}%` })) : null,
     lastSpent ? h('div', { class: 'sub' }, `${money(lastSpent)} last month`) : null));
-  const pendingFor = (a) => allTxns().filter((t) => t.pending && t.account_id === a.account_id).sort((x, y) => (x.date < y.date ? 1 : -1));
+  const split = (posted, p) => h('div', { class: 'split' },
+    h('div', { class: 'splitbar' }, h('i', { class: 'posted', style: `flex:${Math.max(posted, 0.01)}` }), h('i', { class: 'pending', style: `flex:${Math.max(p, 0.01)}` })),
+    h('div', { class: 'splitlegend' },
+      h('div', {}, h('span', { class: 'sw posted' }), h('div', {}, h('b', {}, money(posted, true)), h('small', {}, 'Owed'))),
+      h('div', {}, h('span', { class: 'sw pending' }), h('div', {}, h('b', {}, money(p, true)), h('small', {}, 'Pending'))),
+      h('div', {}, h('div', {}, h('b', {}, money(posted + p, true)), h('small', {}, 'With pending')))));
   const acctRow = (a, label, debt) => {
     const pend = a.type === 'credit' ? pendingFor(a) : [], k = 'p:' + a.account_id, isOpen = open.has(k);
+    const posted = a.balances.current || 0, pAmt = pend.reduce((s, t) => s + t.amount, 0);
+    const amt = pend.length
+      ? h('div', { class: 'amts' }, h('div', { class: 'amt neg' }, money(posted, true)), h('div', { class: 'pend-amt' }, '+' + money(pAmt, true) + ' pending'))
+      : h('div', { class: 'amt' + (debt ? ' neg' : '') }, money(posted, true));
     return [h('div', { class: 'row ' + (label ? 'grp' : 'acct') + (pend.length ? ' tap' : '') + (isOpen ? ' open' : ''), onclick: pend.length ? () => toggle(k) : null },
       h('div', { class: 'grow' }, h('div', { class: 'name' }, label || a.name, a.mask ? h('span', { class: 'mask' }, ' ' + a.mask) : null)),
-      pend.length ? h('span', { class: 'pill' }, pend.length + ' pending') : null,
-      h('div', { class: 'amt' + (debt ? ' neg' : '') }, money(a.balances.current || 0, true)), pend.length ? h('span', { class: 'chev' }, '›') : null),
-      isOpen ? h('div', { class: 'drill' }, pend.map(txnRow)) : null];
+      amt, pend.length ? h('span', { class: 'chev' }, '›') : null),
+      isOpen ? h('div', { class: 'drill' }, split(posted, pAmt), pend.map(txnRow)) : null];
   };
   // Vaults (e.g. SoFi) come through as "cash management" accounts next to an empty parent savings account.
   const vaultBanks = new Set(accs.filter((a) => a.subtype === 'savings').map((a) => a.institution));
