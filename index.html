@@ -24,20 +24,22 @@
   <p id="login-err" class="err"></p>
 </div>
 <main id="main" hidden>
-  <header class="top"><h1 id="title">Overview</h1><button id="sync-btn" class="ibtn" aria-label="Sync">↻</button></header>
-  <section id="view-overview" class="view active"></section>
-  <section id="view-spending" class="view"></section>
-  <section id="view-activity" class="view"></section>
-  <section id="view-loans" class="view"></section>
-  <section id="view-settings" class="view"></section>
+  <header class="top">
+    <div class="toprow"><h1 id="title">Overview</h1>
+      <div class="actions"><button id="sync-btn" class="ibtn" aria-label="Refresh">↻</button><button id="gear-btn" class="ibtn" aria-label="Settings">⚙</button></div></div>
+    <div id="conns" class="chips"></div>
+  </header>
+  <section id="view" class="view"></section>
 </main>
 <nav class="tabbar" id="tabbar" hidden>
   <button class="tab active" data-view="overview"><span class="ti">◎</span>Overview</button>
-  <button class="tab" data-view="spending"><span class="ti">▤</span>Spending</button>
-  <button class="tab" data-view="activity"><span class="ti">≡</span>Activity</button>
-  <button class="tab" data-view="loans"><span class="ti">⌂</span>Loans</button>
-  <button class="tab" data-view="settings"><span class="ti">⚙</span>Settings</button>
+  <button class="tab" data-view="categories"><span class="ti">◔</span>Categories</button>
+  <button class="tab" data-view="merchants"><span class="ti">⌂</span>Merchants</button>
+  <button class="tab" data-view="paidwith"><span class="ti">▭</span>Paid with</button>
+  <button class="tab" data-view="cashflow"><span class="ti">⇅</span>Cash flow</button>
 </nav>
+<div id="panel" class="panel" hidden><header class="ptop"><button id="panel-back" class="back">‹ Back</button><h2 id="panel-title"></h2></header><div id="panel-body" class="pbody"></div></div>
+<div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlay-text"></p></div>
 <div id="toast" class="toast" hidden></div>
 <script src="app.js"></script>
 </body>

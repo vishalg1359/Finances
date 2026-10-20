@@ -112,7 +112,7 @@ async function exchange(env, { public_token, institution }) {
     added: new Date().toISOString(),
   });
   await putJSON(env, ITEMS_KEY, items);
-  return syncAll(env);
+  return { ...(await syncAll(env, data.item_id)), added_item: data.item_id };
 }
 
 const pickTxn = (t) => ({
@@ -133,7 +133,7 @@ async function syncTransactions(env, item) {
   const stored = new Map((await getJSON(env, key, [])).map((t) => [t.id, t]));
   // Plaid requires restarting the whole page loop from the first cursor if data changes mid-loop.
   for (let attempt = 0; attempt < 3; attempt++) {
-    let cursor = item.cursor;
+    let cursor = item.cursor, status = null;
     const added = [], modified = [], removed = [];
     try {
       let more = true;
@@ -145,6 +145,7 @@ async function syncTransactions(env, item) {
         modified.push(...page.modified);
         removed.push(...page.removed);
         cursor = page.next_cursor;
+        status = page.transactions_update_status || status;
         more = page.has_more;
       }
     } catch (e) {
@@ -153,16 +154,17 @@ async function syncTransactions(env, item) {
     }
     for (const t of [...added, ...modified]) stored.set(t.transaction_id, pickTxn(t));
     for (const r of removed) stored.delete(r.transaction_id);
-    item.cursor = cursor;
+    // Until Plaid's first pull finishes there's nothing to page through, so start over next time.
+    if (!(status === 'NOT_READY' && !added.length)) item.cursor = cursor;
     await putJSON(env, key, [...stored.values()]);
-    return;
+    return status;
   }
 }
 
 async function syncItem(env, item) {
   const result = { item_id: item.item_id, institution: item.institution, error: null };
   try {
-    await syncTransactions(env, item);
+    result.tx_status = await syncTransactions(env, item);
     const acc = await plaid(env, '/accounts/get', { access_token: item.access_token });
     result.accounts = acc.accounts;
     try {
@@ -180,14 +182,16 @@ async function syncItem(env, item) {
   return result;
 }
 
-async function syncAll(env) {
+// With onlyId, just that connection is fetched (a new one); the rest keep their last snapshot.
+async function syncAll(env, onlyId) {
   const items = await getJSON(env, ITEMS_KEY, []);
   const previous = await getJSON(env, SNAPSHOT_KEY, { items: [] });
   const results = [];
   for (const item of items) {
+    const old = previous.items.find((p) => p.item_id === item.item_id);
+    if (onlyId && item.item_id !== onlyId && old) { results.push(old); continue; }
     const r = await syncItem(env, item);
     // Keep the last good data for a connection that failed this time.
-    const old = previous.items.find((p) => p.item_id === item.item_id);
     results.push(r.error && old ? { ...old, error: r.error } : r);
   }
   await putJSON(env, ITEMS_KEY, items);
@@ -224,7 +228,7 @@ async function loadData(env) {
   const transactions = [];
   for (const item of items) transactions.push(...(await getJSON(env, `txns:${item.item_id}`, [])));
   transactions.sort((a, b) => (a.date < b.date ? 1 : -1));
-  return { env: env.PLAID_ENV, synced: snapshot.synced, connections: snapshot.items, transactions, history };
+  return { env: env.PLAID_ENV, synced: snapshot.synced, connections: snapshot.items, transactions, history, added_item: null };
 }
 
 async function removeItem(env, { item_id }) {
