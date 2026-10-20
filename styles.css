@@ -322,3 +322,4 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 @keyframes sheetup { from { transform: translateY(100%); } }
 @keyframes fadein { from { opacity: 0; } }
 .card.graph .big { font-size: 26px; margin: 4px 0 2px; }
+.big .unit { font-size: 15px; font-weight: 600; color: var(--dim); margin-left: 2px; letter-spacing: 0; }
