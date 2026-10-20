@@ -288,9 +288,9 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .gsub { font-size: 12px; font-weight: 600; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gsub.muted { color: var(--muted); }
 .card.graph .big { white-space: nowrap; overflow: hidden; }
-.gbars { touch-action: pan-y; }
-.gbars g { transition: opacity .15s; }
-.gbars g.dim { opacity: .35; }
+.glines { touch-action: pan-y; }
+.glines g { transition: opacity .15s; }
+.glines g.dim { opacity: .35; }
 .presets.wrap { flex-wrap: wrap; overflow: visible; margin: 6px 0 0; padding: 0; }
 .field select { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: var(--card2); font-size: 16px; -webkit-appearance: none; appearance: none; }
 .gmoves { display: flex; gap: 8px; }

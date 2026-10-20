@@ -629,10 +629,10 @@ function series(g) {
     for (const t of list) { if (ids && !ids.has(t.account_id)) continue; const i = idx.get(bucketOf(by, t.date)); if (i != null) v[i] += sign * t.amount; }
     return v;
   };
-  const base = { keys, by, kind: 'bar' };
-  if (g.type === 'spend') return { ...base, sets: [{ c: g.cat ? catColor(g.cat) : 'var(--bad)', v: sumBy(spending().filter((t) => (!g.cat || t.category === g.cat) && (!g.merchant || t.name === g.merchant)), 1) }] };
-  if (g.type === 'income') return { ...base, sets: [{ c: 'var(--good)', v: sumBy(income(), -1) }] };
-  if (g.type === 'inout') return { ...base, sets: [{ c: 'var(--good)', l: 'In', v: sumBy(income(), -1) }, { c: 'var(--bad)', l: 'Out', v: sumBy(spending(), 1) }] };
+  const base = { keys, by, kind: 'bars' };
+  if (g.type === 'spend') return { ...base, sets: [{ c: g.cat ? catColor(g.cat) : '#ff5a5f', v: sumBy(spending().filter((t) => (!g.cat || t.category === g.cat) && (!g.merchant || t.name === g.merchant)), 1) }] };
+  if (g.type === 'income') return { ...base, sets: [{ c: '#1fd286', v: sumBy(income(), -1) }] };
+  if (g.type === 'inout') return { ...base, sets: [{ c: '#1fd286', l: 'In', v: sumBy(income(), -1) }, { c: '#ff5a5f', l: 'Out', v: sumBy(spending(), 1) }] };
   if (g.type === 'networth') {
     const hist = (data.history || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
     return { ...base, kind: 'line', sets: [{ v: keys.map((k) => { const e = bucketEnd(by, k); let last = null; for (const p of hist) if (p.date <= e) last = p.assets - p.debts; return last; }) }] };
@@ -648,21 +648,31 @@ function gTitle(g) {
   if (g.type === 'balance') return an || 'Money you have';
   return an && g.type !== 'networth' ? base + ' · ' + an : base;
 }
-function barsChart(s, onScrub) {
-  const W = 340, H = 120, n = s.keys.length, bw = W / n, m = s.sets.length, max = Math.max(1, ...s.sets.flatMap((x) => x.v));
-  const step = Math.ceil(n / 6), gw = bw * 0.7, w = gw / m;
-  const svg = h('svg', { class: 'chart bars', viewBox: `0 0 ${W} ${H + 16}`, html: s.keys.map((k, i) =>
-    `<g data-i="${i}">` + s.sets.map((x, j) => { const bh = (Math.max(0, x.v[i]) / max) * (H - 4);
-      return `<rect class="b" style="animation-delay:${Math.min(i, 30) * 20}ms" x="${(i * bw + (bw - gw) / 2 + j * w).toFixed(1)}" y="${(H - bh).toFixed(1)}" width="${Math.max(1, w - (m > 1 ? 1 : 0)).toFixed(1)}" height="${Math.max(bh, 1).toFixed(1)}" rx="${Math.min(3, w / 3).toFixed(1)}" fill="${x.c}"/>`; }).join('') +
-    ((n - 1 - i) % step === 0 ? `<text x="${(i * bw + bw / 2).toFixed(1)}" y="${H + 13}" font-size="10" text-anchor="middle" fill="var(--dim)">${bucketLabel(s.by, k)}</text>` : '') + '</g>').join('') });
-  const wrap = h('div', { class: 'linewrap gbars' }, svg);
-  const pick = (e) => {
-    const r = wrap.getBoundingClientRect(), i = Math.min(n - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * n)));
-    svg.querySelectorAll('g').forEach((gg) => gg.classList.toggle('dim', +gg.dataset.i !== i));
-    onScrub({ i, label: bucketLabel(s.by, s.keys[i]) });
+function linesChart(s, onScrub) {
+  const W = 340, H = 130, n = s.keys.length, max = Math.max(1, ...s.sets.flatMap((x) => x.v)) * 1.08;
+  const X = (i) => (n < 2 ? W / 2 : (i / (n - 1)) * W), Y = (v) => H - 6 - (Math.max(0, v) / max) * (H - 14);
+  const curve = (v) => v.map((y, i) => {
+    if (!i) return `M0 ${Y(y).toFixed(1)}`;
+    const x0 = X(i - 1), x1 = X(i), cx = (x0 + x1) / 2;
+    return `C${cx.toFixed(1)} ${Y(v[i - 1]).toFixed(1)} ${cx.toFixed(1)} ${Y(y).toFixed(1)} ${x1.toFixed(1)} ${Y(y).toFixed(1)}`;
+  }).join(' ');
+  const id = 'g' + Math.random().toString(36).slice(2, 7), single = s.sets.length === 1;
+  const ticks = s.keys.map((k, i) => ((n - 1 - i) % Math.ceil(n / 6) === 0 ? `<text x="${Math.min(W - 12, Math.max(12, X(i))).toFixed(1)}" y="${H + 13}" font-size="10" text-anchor="middle" fill="var(--dim)">${bucketLabel(s.by, k)}</text>` : '')).join('');
+  const svg = h('svg', { class: 'chart', viewBox: `0 0 ${W} ${H + 16}`, html:
+    s.sets.map((x, j) => `<linearGradient id="${id}${j}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${x.c}" stop-opacity="${single ? 0.32 : 0.14}"/><stop offset="1" stop-color="${x.c}" stop-opacity="0"/></linearGradient>`).join('') +
+    s.sets.map((x, j) => { const d = curve(x.v); return `<path class="area" d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id}${j})"/><path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${x.c}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`; }).join('') + ticks });
+  const pos = (i, x) => `left:${(X(i) / W) * 100}%;top:${(Y(x.v[i]) / (H + 16)) * 100}%;--c:${x.c}`;
+  const last = n - 1, cursor = h('i', { class: 'cursor', hidden: true });
+  const dots = s.sets.map((x) => h('i', { class: 'pulse', style: pos(last, x) }));
+  const wrap = h('div', { class: 'linewrap glines' }, svg, cursor, ...dots);
+  const move = (e) => {
+    const r = wrap.getBoundingClientRect(), i = Math.round(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * last);
+    cursor.hidden = false; cursor.style.left = (X(i) / W) * 100 + '%';
+    dots.forEach((d, j) => { d.setAttribute('style', pos(i, s.sets[j])); d.classList.add('still'); });
+    onScrub({ i, label: bucketLabel(s.by, s.keys[i]) + (s.by === 'month' ? ' ' + s.keys[i].slice(0, 4) : '') });
   };
-  const end = () => { svg.querySelectorAll('g').forEach((gg) => gg.classList.remove('dim')); onScrub(null); };
-  wrap.addEventListener('pointerdown', pick); wrap.addEventListener('pointermove', (e) => { if (e.buttons || e.pointerType === 'touch') pick(e); });
+  const end = () => { cursor.hidden = true; dots.forEach((d, j) => { d.setAttribute('style', pos(last, s.sets[j])); d.classList.remove('still'); }); onScrub(null); };
+  wrap.addEventListener('pointerdown', move); wrap.addEventListener('pointermove', (e) => { if (e.buttons || e.pointerType === 'touch') move(e); });
   for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) wrap.addEventListener(ev, end);
   return wrap;
 }
@@ -689,7 +699,7 @@ function graphCard(g, opts = {}) {
   show(null);
   const chart = s.kind === 'line'
     ? lineChart(s.keys.map((k, i) => ({ v: first[i], date: bucketEnd(s.by, k) })).filter((p) => p.v != null), (p) => show(p ? { v: p.v, label: dayName(p.date) } : null))
-    : barsChart(s, show);
+    : linesChart(s, show);
   return h('div', { class: 'card graph' + (opts.flat ? ' flat' : '') },
     h('div', { class: 'ghead' }, h('div', { class: 'gtitle' }, gTitle(g)),
       opts.edit ? h('button', { class: 'gbtn', 'aria-label': 'Edit graph', onclick: opts.edit }, '•••') : null,
