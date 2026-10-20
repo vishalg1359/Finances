@@ -157,19 +157,24 @@ function lastMonths(n) {
   for (let i = n - 1; i >= 0; i--) { const x = new Date(d); x.setMonth(d.getMonth() - i); out.push(x.toISOString().slice(0, 7)); }
   return out;
 }
-// A merchant charged in 3+ different months for roughly the same amount looks like a subscription.
+// A merchant that charges about the same amount on a regular schedule (and still does) looks like a subscription.
+const CADENCES = [['Weekly', 7, 5, 9], ['Every 2 weeks', 14, 12, 17], ['Monthly', 30.4, 26, 35], ['Quarterly', 91, 84, 98], ['Yearly', 365, 345, 385]];
 function subscriptions() {
   const groups = {};
   for (const t of spending().filter((x) => x.amount > 0)) (groups[t.name] = groups[t.name] || []).push(t);
   const subs = [];
   for (const [name, list] of Object.entries(groups)) {
-    const months = new Set(list.map((t) => monthKey(t.date)));
-    if (months.size < 3) continue;
-    const latest = list.sort((a, b) => (a.date < b.date ? 1 : -1))[0];
-    const similar = list.filter((t) => Math.abs(t.amount - latest.amount) <= Math.max(1, latest.amount * 0.1));
-    if (new Set(similar.map((t) => monthKey(t.date))).size >= 3) subs.push({ name, amount: latest.amount, last: latest.date, logo: latest.logo });
+    list.sort((a, b) => (a.date < b.date ? 1 : -1));
+    const latest = list[0], similar = list.filter((t) => Math.abs(t.amount - latest.amount) <= Math.max(1, latest.amount * 0.05));
+    if (similar.length < 2) continue;
+    const gaps = similar.slice(0, -1).map((t, i) => daysBetween(similar[i + 1].date, t.date)).sort((x, y) => x - y), gap = gaps[Math.floor(gaps.length / 2)];
+    const c = CADENCES.find(([, , lo, hi]) => gap >= lo && gap <= hi);
+    if (!c || similar.length < (c[1] >= 84 ? 2 : 3)) continue;
+    if (gaps.filter((g) => Math.abs(g - gap) <= Math.max(3, gap * 0.25)).length < gaps.length * 0.7) continue;
+    if (daysBetween(latest.date, todayISO()) > c[1] * 1.5 + 7) continue;
+    subs.push({ name, amount: latest.amount, monthly: (latest.amount * 30.4) / c[1], every: c[0], last: latest.date, next: shiftDays(latest.date, Math.round(c[1])), logo: latest.logo, history: similar });
   }
-  return subs.sort((a, b) => b.amount - a.amount);
+  return subs.sort((a, b) => b.monthly - a.monthly);
 }
 
 // ---------- manual loans (e.g. Aidvantage) ----------
@@ -307,7 +312,7 @@ const isDebt = (a) => a.type === 'credit' || a.type === 'loan';
 const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const shortDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const txnRow = (t) => h('div', { class: 'row' }, logo(t), h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name),
-  h('div', { class: 'sub' }, shortDay(t.date) + (t.pending ? ' · pending' : '') + (t.amount < 0 ? ' · refund' : ''))),
+  h('div', { class: 'sub' }, shortDay(t.date) + (t.pending ? ' · pending' : '') + (t.amount < 0 && t.category !== 'INCOME' && !NOT_SPENDING.has(t.category) ? ' · refund' : ''))),
   h('div', { class: 'amt ' + (t.amount < 0 ? 'pos' : 'neg') }, (t.amount < 0 ? '+' : '−') + money(Math.abs(t.amount), true)));
 const toggle = (k) => { open.has(k) ? open.delete(k) : open.add(k); render(); };
 function loadingBanner() {
@@ -354,15 +359,15 @@ function viewOverview(el) {
   const pendSum = (a) => pendingFor(a).reduce((s, t) => s + t.amount, 0);
   const owePend = owe.filter((a) => a.type === 'credit').reduce((s, a) => s + pendSum(a), 0);
   el.append(h('div', { class: 'tiles' },
-    h('div', { class: 'tile tap', onclick: () => openPanel('settings') }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }),
+    h('div', { class: 'tile tap', onclick: () => { const ids = have.filter(isMain).map((a) => a.account_id); openSheet({ title: have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main accounts', list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => h('button', { class: 'btn small', onclick: () => openPanel('settings') }, 'Choose accounts') }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }),
         have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main'),
       num('tile-num', 'chk' + conn, sum(have.filter(isMain)))),
-    h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
+    h('div', { class: 'tile tap', onclick: () => { const cards = owe.filter((a) => a.type === 'credit'), ids = cards.map((a) => a.account_id); openSheet({ title: 'Credit cards', list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => split(sum(cards), owePend) }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
       num('tile-num', 'owe' + conn, sum(owe.filter((a) => a.type === 'credit'))), owePend ? h('div', { class: 'tile-pend' }, '+' + money(owePend, true) + ' pending') : null)));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
   const pace = paceChart();
-  el.append(h('div', { class: 'card tap spendcard', onclick: () => showView('categories') },
+  el.append(h('div', { class: 'card tap spendcard', onclick: () => openSheet({ title: 'Spent this month', list: () => spending().filter((t) => monthKey(t.date) === m), head: () => h('button', { class: 'btn small', onclick: () => { closePanel(true); showView('categories'); } }, 'By category') }) },
     h('div', { class: 'label' }, 'Spent this month'), num('big', 'spent' + conn, spent, true),
     pace ? h('div', { class: 'linewrap' }, pace.svg) : null,
     pace ? h('div', { class: 'pace-foot' },
@@ -383,7 +388,7 @@ function viewOverview(el) {
     ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage', '#a37bff']]
     .map(([l, f, c]) => ({ l, c, v: sum(have.filter(f)) })).filter((x) => x.v > 0);
   const allocTotal = alloc.reduce((s, x) => s + x.v, 0);
-  if (alloc.length > 1) el.append(h('div', { class: 'card alloc' },
+  if (alloc.length > 1) el.append(h('div', { class: 'card alloc tap', onclick: () => { const ids = have.map((a) => a.account_id); openSheet({ title: 'Money you have', list: () => allTxns().filter((t) => ids.includes(t.account_id)) }); } },
     h('div', { class: 'allocbar' }, alloc.map((x) => h('i', { style: `flex:${x.v};background:${x.c}` }))),
     h('div', { class: 'allockey' }, alloc.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), x.l, h('b', {}, Math.round((x.v / allocTotal) * 100) + '%'))))));
   if (accs.length || manual.length) el.append(accountGrid(accs.filter((a) => !emptyParent(a)), manual, pendingFor, split));
@@ -392,7 +397,7 @@ function viewOverview(el) {
 
 // ---------- account boxes (Overview) ----------
 let layout = store.get('layout', { order: [], size: {}, groups: {} });
-let editing = false, picked = new Set(), dragId = null, detailId = null;
+let editing = false, picked = new Set(), dragId = null;
 const saveLayout = () => store.set('layout', layout);
 const SIZES = [[1, 1], [2, 1], [1, 2], [2, 2]];
 const typeRank = (a) => (a.subtype === 'checking' ? 0 : ['savings', 'cash management'].includes(a.subtype) ? 1 : ['investment', 'brokerage'].includes(a.type) ? 2 : a.type === 'credit' ? 3 : a.type === 'loan' ? 4 : 5);
@@ -401,6 +406,9 @@ function accountGrid(accs, manual, pendingFor, split) {
   for (const a of accs) items[a.account_id] = { id: a.account_id, a, name: a.name, value: a.balances.current || 0, debt: isDebt(a), rank: typeRank(a),
     pend: a.type === 'credit' ? pendingFor(a).reduce((s, t) => s + t.amount, 0) : 0, mark: mark(a.brand, a.institution), sub: (a.mask ? '••' + a.mask : '') };
   for (const { l, bal } of manual) items['loan:' + l.id] = { id: 'loan:' + l.id, loan: l, name: l.name, value: bal, debt: true, rank: 4, pend: 0, mark: mark(null, l.name), sub: 'estimated' };
+  const subs = subscriptions();
+  if (subs.length) items.recurring = { id: 'recurring', special: true, name: 'Recurring', value: subs.reduce((t, x) => t + x.monthly, 0), pend: 0, rank: 6, perMo: true,
+    mark: h('div', { class: 'bank', style: 'background:#a37bff' }, h('svg', { viewBox: '0 0 24 24', html: '<path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>' })), sub: subs.length + ' subscriptions', subs };
   const inGroup = new Set(Object.values(layout.groups).flatMap((g) => g.members));
   for (const id of Object.keys(items).sort((x, y) => items[x].rank - items[y].rank)) if (!layout.order.includes(id)) layout.order.push(id);
   for (const [gid, g] of Object.entries(layout.groups)) {
@@ -417,18 +425,22 @@ function accountGrid(accs, manual, pendingFor, split) {
   const idsOf = (t) => (t.members ? t.members.map((m) => m.id) : [t.id]);
   const extra = (t) => t.members
     ? h('div', { class: 'mini' }, t.members.slice(0, 4).map((m) => h('div', {}, h('span', {}, m.name), h('b', { class: m.debt ? 'neg' : '' }, money(m.value)))))
+    : t.subs ? h('div', { class: 'mini' }, t.subs.slice(0, 4).map((x) => h('div', {}, h('span', {}, x.name), h('b', {}, money(x.amount)))))
     : t.loan ? null : h('div', { class: 'mini' }, recent([t.id], 3).map((x) => h('div', {}, h('span', {}, x.name), h('b', { class: x.amount < 0 ? 'pos' : 'neg' }, (x.amount < 0 ? '+' : '−') + money(Math.abs(x.amount))))));
   const tileEl = (t) => {
     const [w, hh] = layout.size[t.id] || [1, 1];
     const onclick = () => {
       if (editing) { picked.has(t.id) ? picked.delete(t.id) : picked.add(t.id); draw(); return; }
       if (t.loan) return openPanel('loans');
-      detailId = detailId === t.id ? null : t.id; draw();
+      if (t.subs) return openRecurring();
+      openSheet({ title: t.name, list: () => recent(idsOf(t), 1e9),
+        head: () => t.members ? h('div', { class: 'card list' }, t.members.map((m) => h('div', { class: 'row' }, m.mark.cloneNode(true), h('div', { class: 'grow' }, h('div', { class: 'name' }, m.name)), h('div', { class: 'amt' + (m.debt ? ' neg' : '') }, money(m.value, true)))))
+          : t.a && t.a.type === 'credit' && t.pend ? split(t.value, t.pend) : null });
     };
-    return h('div', { class: 'atile' + (editing ? ' editing' : '') + (picked.has(t.id) ? ' picked' : '') + (dragId === t.id ? ' dragging' : '') + (detailId === t.id ? ' open' : '') + (t.members ? ' group' : ''),
+    return h('div', { class: 'atile' + (editing ? ' editing' : '') + (picked.has(t.id) ? ' picked' : '') + (dragId === t.id ? ' dragging' : '') + (t.members ? ' group' : ''),
       'data-id': t.id, style: `grid-column:span ${w};grid-row:span ${hh}`, onclick },
       h('div', { class: 'atile-top' }, t.mark, h('div', { class: 'atile-name' }, t.name)),
-      h('div', { class: 'atile-amt fit' + (t.debt ? ' neg' : '') + (w === 2 ? ' wide' : '') }, money(t.value, w === 2)),
+      h('div', { class: 'atile-amt fit' + (t.debt ? ' neg' : '') + (w === 2 ? ' wide' : '') }, money(t.value, w === 2 && !t.perMo), t.perMo ? h('small', { class: 'permo' }, '/mo') : null),
       t.pend ? h('div', { class: 'pend-amt' }, '+' + money(t.pend, true) + ' pending') : h('div', { class: 'atile-sub' }, t.sub),
       hh === 2 ? extra(t) : null,
       editing ? h('button', { class: 'tbtn size', 'aria-label': 'Resize', onclick: (e) => { e.stopPropagation(); const i = SIZES.findIndex(([a, b]) => a === w && b === hh); layout.size[t.id] = SIZES[(i + 1) % SIZES.length]; saveLayout(); draw(); } },
@@ -455,7 +467,7 @@ function accountGrid(accs, manual, pendingFor, split) {
     addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
   };
   const groupPicked = () => {
-    const sel = [...picked].map((id) => items[id]).filter(Boolean), name = prompt('Name this group', sel.find((t) => t.group)?.name || 'Group');
+    const sel = [...picked].map((id) => items[id]).filter((t) => t && !t.special), name = prompt('Name this group', sel.find((t) => t.group)?.name || 'Group');
     if (name == null) return;
     const members = [...new Set(sel.flatMap((t) => (t.members ? t.members.map((m) => m.id) : [t.id])))];
     for (const t of sel) if (t.gid) delete layout.groups[t.gid];
@@ -466,16 +478,11 @@ function accountGrid(accs, manual, pendingFor, split) {
   const ungroup = () => { for (const id of picked) if (items[id] && items[id].gid) delete layout.groups[items[id].gid]; picked.clear(); saveLayout(); render(); };
   const rename = () => { const t = items[[...picked][0]], n = prompt('Rename group', t.name); if (n) { layout.groups[t.gid].name = n.trim() || t.name; saveLayout(); render(); } };
   const draw = () => {
-    const sel = [...picked].map((id) => items[id]).filter(Boolean), groupsSel = sel.filter((t) => t.gid);
-    const d = detailId && items[detailId];
+    const sel = [...picked].map((id) => items[id]).filter((t) => t && !t.special), groupsSel = sel.filter((t) => t.gid);
     wrap.replaceChildren(...[
-      h('div', { class: 'sechead' }, h('h2', {}, 'Accounts'), h('button', { class: 'edit-btn' + (editing ? ' on' : ''), onclick: () => { editing = !editing; picked.clear(); detailId = null; render(); } }, editing ? 'Done' : 'Edit')),
+      h('div', { class: 'sechead' }, h('h2', {}, 'Accounts'), h('button', { class: 'edit-btn' + (editing ? ' on' : ''), onclick: () => { editing = !editing; picked.clear(); render(); } }, editing ? 'Done' : 'Edit')),
       editing ? h('div', { class: 'edit-hint' }, 'Drag ⠿ to move · ⤢ to resize · tap boxes to select') : null,
       h('div', { class: 'agrid' }, tiles().map((id) => tileEl(items[id]))),
-      d && !editing ? h('div', { class: 'card detail' }, h('h2', {}, d.name, h('span', { class: d.debt ? 'neg' : '' }, money(d.value, true))),
-        d.a && d.a.type === 'credit' && d.pend ? split(d.value, d.pend) : null,
-        d.members ? d.members.map((m) => h('div', { class: 'row' }, m.mark.cloneNode(true), h('div', { class: 'grow' }, h('div', { class: 'name' }, m.name)), h('div', { class: 'amt' + (m.debt ? ' neg' : '') }, money(m.value, true)))) : null,
-        recent(idsOf(d), 8).map(txnRow)) : null,
       editing ? h('div', { class: 'editbar' },
         h('button', { class: 'btn', disabled: sel.length < 2 ? true : null, onclick: groupPicked }, sel.length >= 2 ? `Group ${sel.length}` : 'Group'),
         groupsSel.length ? h('button', { class: 'btn', onclick: ungroup }, 'Ungroup') : null,
@@ -563,8 +570,8 @@ function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) =>
 function viewMerchants(el) {
   breakdown(el, (t) => t.name || 'Unknown', (k) => k, 'rows', (g) => logo(g.l[0]));
   const subs = data && data.connections.length ? subscriptions() : [];
-  if (subs.length) el.append(h('div', { class: 'card list' }, h('h2', {}, 'Recurring', h('span', {}, money(subs.reduce((s, x) => s + x.amount, 0), true) + '/mo')),
-    subs.map((s) => h('div', { class: 'row' }, logo(s), h('div', { class: 'grow' }, h('div', { class: 'name' }, s.name)), h('div', { class: 'amt' }, money(s.amount, true))))));
+  if (subs.length) el.append(h('div', { class: 'card list tap', onclick: openRecurring }, h('h2', {}, 'Recurring', h('span', {}, money(subs.reduce((t, x) => t + x.monthly, 0), true) + '/mo')),
+    subs.slice(0, 5).map((x) => h('div', { class: 'row' }, logo(x), h('div', { class: 'grow' }, h('div', { class: 'name' }, x.name), h('div', { class: 'sub' }, x.every)), h('div', { class: 'amt' }, money(x.amount, true))))));
 }
 function viewPaidWith(el) {
   const accs = Object.fromEntries(allAccounts().map((a) => [a.account_id, a]));
@@ -599,6 +606,47 @@ function viewCashflow(el) {
   })));
 }
 
+// ---------- transaction sheet ----------
+let sheet = null, sheetLimit = 150;
+function openSheet(sh) { sheet = sh; sheetLimit = 150; openPanel('txns'); }
+function viewSheet(el) {
+  if (!sheet) return;
+  if (sheet.render) return sheet.render(el);
+  const head = sheet.head && sheet.head();
+  if (head) el.append(head.classList.contains('card') || head.classList.contains('btn') ? head : h('div', { class: 'card' }, head));
+  const list = sheet.list().slice().sort((a, b) => (a.pending !== b.pending ? (a.pending ? -1 : 1) : a.date < b.date ? 1 : -1));
+  if (!list.length) return el.append(h('div', { class: 'empty small' }, 'No transactions yet'));
+  const months = {};
+  for (const t of list) if (!t.pending && t.amount > 0) months[monthKey(t.date)] = (months[monthKey(t.date)] || 0) + t.amount;
+  let card = null, cur = null;
+  for (const t of list.slice(0, sheetLimit)) {
+    const k = t.pending ? 'pending' : monthKey(t.date);
+    if (k !== cur) {
+      cur = k; card = h('div', { class: 'card list' }, h('h2', {}, k === 'pending' ? 'Pending' : monthName(k, true), k === 'pending' ? null : h('span', {}, money(months[k] || 0, true) + ' out')));
+      el.append(card);
+    }
+    card.append(txnRow(t));
+  }
+  if (list.length > sheetLimit) el.append(h('button', { class: 'btn', onclick: () => { sheetLimit += 300; renderPanel(); } }, `Show more (${list.length - sheetLimit})`));
+}
+function openRecurring() {
+  openSheet({ title: 'Recurring', render: (el) => {
+    const subs = subscriptions();
+    if (!subs.length) return el.append(h('div', { class: 'empty small' }, 'No recurring charges found yet'));
+    el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'About'), h('div', { class: 'big' }, money(subs.reduce((t, x) => t + x.monthly, 0), true), h('small', { class: 'permo' }, '/mo')),
+      h('div', { class: 'sub muted' }, money(subs.reduce((t, x) => t + x.monthly, 0) * 12) + ' a year · ' + subs.length + ' subscriptions')));
+    const card = h('div', { class: 'card list' });
+    for (const x of subs) {
+      const k = 'r:' + x.name, isOpen = open.has(k);
+      card.append(h('div', { class: 'row tap' + (isOpen ? ' open' : ''), onclick: () => { isOpen ? open.delete(k) : open.add(k); renderPanel(); } },
+        logo(x), h('div', { class: 'grow' }, h('div', { class: 'name' }, x.name), h('div', { class: 'sub' }, `${x.every} · next ~${shortDay(x.next)}`)),
+        h('div', { class: 'amt' }, money(x.amount, true)), h('span', { class: 'chev' }, '›')));
+      if (isOpen) card.append(h('div', { class: 'drill' }, x.history.map(txnRow)));
+    }
+    el.append(card);
+  } });
+}
+
 // ---------- panels: settings + loans ----------
 let panel = null;
 function openPanel(name) { panel = name; $('panel').hidden = false; $('panel').classList.remove('closing'); renderPanel(); }
@@ -611,9 +659,9 @@ function closePanel(instant) {
 function renderPanel() {
   if (!panel) return;
   const el = $('panel-body'); el.replaceChildren();
-  $('panel-title').textContent = panel === 'loans' ? 'Loans' : 'Settings';
+  $('panel-title').textContent = panel === 'txns' ? sheet.title : panel === 'loans' ? 'Loans' : 'Settings';
   $('panel-back').onclick = () => (panel === 'loans' ? openPanel('settings') : closePanel());
-  (panel === 'loans' ? viewLoans : viewSettings)(el);
+  (panel === 'txns' ? viewSheet : panel === 'loans' ? viewLoans : viewSettings)(el);
 }
 function loanForm(el, existing) {
   const l = existing || { id: Date.now().toString(36), name: 'Aidvantage', balance: '', rate: '', payment: '', asOf: todayISO(), match: 'aidvantage, dept education, dept of ed' };
