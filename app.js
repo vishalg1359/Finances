@@ -333,7 +333,7 @@ function viewOverview(el) {
         have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main'),
       num('tile-num', 'chk' + conn, sum(have.filter(isMain)))),
     h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
-      num('tile-num', 'owe' + conn, oweTotal), owePend ? h('div', { class: 'tile-pend' }, '+' + money(owePend, true) + ' pending') : null)));
+      num('tile-num', 'owe' + conn, sum(owe.filter((a) => a.type === 'credit'))), owePend ? h('div', { class: 'tile-pend' }, '+' + money(owePend, true) + ' pending') : null)));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
   el.append(h('div', { class: 'card tap spendcard', onclick: () => showView('categories') },
