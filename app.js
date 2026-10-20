@@ -544,13 +544,12 @@ function rangePresets() {
 }
 const fmtShort = (iso) => new Date(iso + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: iso.slice(0, 4) === todayISO().slice(0, 4) ? undefined : 'numeric' });
 const presetOf = (r) => rangePresets().find(([, x]) => x.from === r.from && x.to === r.to);
-const rangeLabel = (r) => { const p = presetOf(r); return p ? p[0] : fmtShort(r.from) + ' – ' + (r.live ? 'Now' : fmtShort(r.to)); };
-const nowChip = (on, toggle) => h('button', { type: 'button', class: 'chip now' + (on ? ' on' : ''), onclick: (e) => { e.preventDefault(); e.stopPropagation(); toggle(); } }, 'Now');
+const rangeLabel = (r) => { const p = presetOf(r); return p ? p[0] : fmtShort(r.from) + ' – ' + (r.live ? 'Today' : fmtShort(r.to)); };
+const dateBox = (input, today) => h('div', { class: 'dbox' + (today ? ' today' : '') }, input, today ? h('span', { class: 'dtoday' }, 'Today') : null);
 function rangeBar(rerender) {
   const set = (r, live = r.to === todayISO()) => { if (r.from > r.to) r = { from: r.to, to: r.from }; range = { from: r.from, to: r.to, live }; open.clear(); rerender(); };
-  const date = (key) => h('label', { class: 'dfield' }, h('span', {}, key === 'from' ? 'From' : 'To',
-      key === 'to' ? nowChip(range.live, () => (range.live ? set(range, false) : set({ ...range, to: todayISO() }, true))) : null),
-    h('input', { type: 'date', value: range[key], max: todayISO(), onchange: (e) => e.target.value && set({ from: range.from, to: range.to, [key]: e.target.value }) }));
+  const date = (key) => h('label', { class: 'dfield' }, h('span', {}, key === 'from' ? 'From' : 'To'),
+    dateBox(h('input', { type: 'date', value: range[key], max: todayISO(), onchange: (e) => e.target.value && set({ from: range.from, to: range.to, [key]: e.target.value }) }), key === 'to' && range.live));
   return h('div', { class: 'rangebar' },
     h('div', { class: 'presets' }, rangePresets().map(([label, r]) =>
       h('button', { class: 'chip' + (r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => set(r) }, label))),
@@ -646,7 +645,7 @@ function gRange(g) {
   if (g.period === 'Custom' && g.from) return { from: g.from, to: !g.toNow && g.to && g.to < todayISO() ? g.to : todayISO() };
   return (GPERIODS.find((p) => p[0] === g.period) || GPERIODS[5])[2]();
 }
-const periodLabel = (g) => (g.period === 'Custom' && g.from ? `${shortDay(gRange(g).from)} – ${g.toNow ? 'Now' : shortDay(gRange(g).to)}` : (GPERIODS.find((p) => p[0] === g.period) || [, g.period])[1]);
+const periodLabel = (g) => (g.period === 'Custom' && g.from ? `${shortDay(gRange(g).from)} – ${g.toNow ? 'Today' : shortDay(gRange(g).to)}` : (GPERIODS.find((p) => p[0] === g.period) || [, g.period])[1]);
 function bucketKeys(g) {
   const { from, to } = gRange(g), span = daysBetween(from, to);
   const make = (by) => { const keys = []; for (let d = from; d <= to; d = shiftDays(d, 1)) { const k = bucketOf(by, d); if (keys[keys.length - 1] !== k) keys.push(k); } return keys; };
@@ -816,9 +815,8 @@ function openGraphEditor(orig, preset) {
             onchange: (e) => { f.accts = e.target.checked ? [...f.accts, a.account_id] : f.accts.filter((x) => x !== a.account_id); renderPanel(); } })))));
     }
     el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Period'), chips([...GPERIODS.map(([p, l]) => [p, l]), ['Custom', 'Custom']], 'period'),
-      f.period === 'Custom' ? h('div', { class: 'gdates' }, ['from', 'to'].map((key) => h('div', { class: 'field' }, h('label', {}, key === 'from' ? 'From' : 'To',
-          key === 'to' ? nowChip(f.toNow, () => { f.toNow = !f.toNow; f.to = todayISO(); renderPanel(); }) : null),
-        h('input', { type: 'date', value: key === 'to' && f.toNow ? todayISO() : f[key], max: todayISO(), onchange: (e) => { if (e.target.value) { f[key] = e.target.value; if (key === 'to') f.toNow = e.target.value === todayISO(); if (f.from > f.to) [f.from, f.to] = [f.to, f.from]; renderPanel(); } } })))) : null,
+      f.period === 'Custom' ? h('div', { class: 'gdates' }, ['from', 'to'].map((key) => h('div', { class: 'field' }, h('label', {}, key === 'from' ? 'From' : 'To'),
+        dateBox(h('input', { type: 'date', value: key === 'to' && f.toNow ? todayISO() : f[key], max: todayISO(), onchange: (e) => { if (e.target.value) { f[key] = e.target.value; if (key === 'to') f.toNow = e.target.value === todayISO(); if (f.from > f.to) [f.from, f.to] = [f.to, f.from]; renderPanel(); } } }), key === 'to' && f.toNow)))) : null,
       h('div', { class: 'label', style: 'margin-top:12px' }, 'Group by'), chips(GBY, 'by', ([v]) => v !== 'day' || daysBetween(gRange(f).from, gRange(f).to) <= 183)));
     const i = orig ? graphs.indexOf(orig) : -1;
     const done = () => { if (f.type !== 'spend') { delete f.cats; delete f.merchants; } if (i >= 0) graphs[i] = f; else graphs.push({ ...f, id: Date.now().toString(36) }); saveGraphs(); closePanel(); render(); };
