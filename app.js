@@ -989,3 +989,27 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !panel && $('overlay').hidden) location.reload(); });
   navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((r) => r.update()).catch(() => {});
 }
+
+// Swipe from the left edge to go back, like iOS.
+{
+  const P = $('panel'); let sw = null;
+  const reset = () => { P.style.transition = ''; P.style.transform = ''; P.style.boxShadow = ''; };
+  P.addEventListener('touchstart', (e) => {
+    const t = e.touches[0];
+    sw = panel && t.clientX < 28 ? { x: t.clientX, y: t.clientY, t: Date.now(), dx: 0, on: false } : null;
+  }, { passive: true });
+  P.addEventListener('touchmove', (e) => {
+    if (!sw) return;
+    const t = e.touches[0], dx = t.clientX - sw.x, dy = t.clientY - sw.y;
+    if (!sw.on) { if (Math.abs(dy) > 10 && Math.abs(dy) > dx) { sw = null; return; } if (dx < 8) return; sw.on = true; P.style.transition = 'none'; P.style.boxShadow = '-12px 0 30px rgba(0,0,0,.5)'; }
+    e.preventDefault(); sw.dx = Math.max(0, dx); P.style.transform = `translateX(${sw.dx}px)`;
+  }, { passive: false });
+  const end = () => {
+    if (!sw || !sw.on) { sw = null; return; }
+    const fast = sw.dx / Math.max(1, Date.now() - sw.t) > 0.5, go = sw.dx > innerWidth * 0.33 || (fast && sw.dx > 40);
+    P.style.transition = 'transform .2s cubic-bezier(.2,.8,.2,1)'; P.style.transform = go ? 'translateX(100%)' : '';
+    sw = null;
+    setTimeout(() => { if (!go) return reset(); if (panel === 'loans') { reset(); openPanel('settings'); } else { closePanel(true); reset(); } }, 200);
+  };
+  P.addEventListener('touchend', end); P.addEventListener('touchcancel', end);
+}
