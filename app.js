@@ -214,7 +214,8 @@ function payoff(balance, rate, payment) {
 }
 
 // ---------- charts ----------
-const avgLine = (y, W, c) => `<line class="avg" x1="0" x2="${W}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${c}" stroke-width="1.3" stroke-dasharray="3 4" stroke-opacity=".8"/>`;
+const avgLine = (y, W, c, label, below) => `<line class="avg" x1="0" x2="${W}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${c}" stroke-width="1.3" stroke-dasharray="3 4" stroke-opacity=".8"/>` +
+  (label ? `<text x="4" y="${(below ? y + 12 : Math.max(10, y - 5)).toFixed(1)}" font-size="10" font-weight="700" fill="${c}" style="paint-order:stroke;stroke:var(--card);stroke-width:3px">avg ${label}</text>` : '');
 const PALETTE = ['#1fd286', '#4f8cff', '#ffb547', '#ff6b8b', '#a37bff', '#2fd0d6', '#ff8a4c', '#c3d84a', '#6b7280'];
 function lineChart(points, onScrub, avg) {
   if (points.length < 2) return null;
@@ -226,7 +227,7 @@ function lineChart(points, onScrub, avg) {
     `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".3"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>` +
     `<path class="area" d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id})"/>` +
     `<path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${col}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>` +
-    (avg ? avgLine(Y(vals.reduce((t, v) => t + v, 0) / vals.length), W, '#9aa0a6') : '') });
+    (avg ? avgLine(Y(vals.reduce((t, v) => t + v, 0) / vals.length), W, '#9aa0a6', money(vals.reduce((t, v) => t + v, 0) / vals.length)) : '') });
   const pos = (i) => `left:${(X(i) / W) * 100}%;top:${(Y(points[i].v) / H) * 100}%`;
   const last = points.length - 1;
   const pulse = h('i', { class: 'pulse', style: pos(last) + `;--c:${col}` });
@@ -707,7 +708,7 @@ function linesChart(s, onScrub) {
   const svg = h('svg', { class: 'chart', viewBox: `0 0 ${W} ${H + 16}`, html:
     s.sets.map((x, j) => `<linearGradient id="${id}${j}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${x.c}" stop-opacity="${single ? 0.32 : 0.14}"/><stop offset="1" stop-color="${x.c}" stop-opacity="0"/></linearGradient>`).join('') +
     s.sets.map((x, j) => { const d = curve(x.v); return `<path class="area" d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id}${j})"/><path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${x.c}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`; }).join('') +
-    s.sets.map((x) => avgLine(Y(meanOf(x.v)), W, x.c)).join('') + ticks });
+    s.sets.map((x, j) => avgLine(Y(meanOf(x.v)), W, x.c, money(meanOf(x.v)), j > 0 && Math.abs(Y(meanOf(x.v)) - Y(meanOf(s.sets[0].v))) < 14)).join('') + ticks });
   const pos = (i, x) => `left:${(X(i) / W) * 100}%;top:${(Y(x.v[i]) / (H + 16)) * 100}%;--c:${x.c}`;
   const last = n - 1, cursor = h('i', { class: 'cursor', hidden: true });
   const dots = s.sets.map((x) => h('i', { class: 'pulse', style: pos(last, x) }));
@@ -733,14 +734,14 @@ function graphCard(g, opts = {}) {
       big.textContent = cur == null ? '—' : money(cur, true);
       const ch = pts.length > 1 ? pts[pts.length - 1] - pts[0] : null;
       sub.className = 'gsub ' + (sc ? 'muted' : ch == null ? 'muted' : ch >= 0 ? 'pos' : 'neg');
-      sub.textContent = sc ? sc.label : ch == null ? 'Not enough history yet' : `${ch >= 0 ? '▲' : '▼'} ${money(Math.abs(ch))} since ${shortDay(s.from)}`;
+      sub.className = 'gsub muted'; sub.textContent = sc ? sc.label : ch == null ? 'Not enough history yet' : 'Today';
       return;
     }
     const i = sc ? sc.i : s.keys.length - 1;
     if (s.sets.length > 1) {
       big.className = 'big fit'; big.replaceChildren(h('span', { class: 'pos' }, '+' + money(s.sets[0].v[i])), h('span', { class: 'gslash' }, ' / '), h('span', { class: 'neg' }, '−' + money(s.sets[1].v[i])));
     } else big.textContent = money(first[i], true);
-    sub.className = 'gsub muted'; sub.textContent = lbl(i) + (sc || s.sets.length > 1 ? '' : ` · avg ${money(meanOf(first))} per ${per}`);
+    sub.className = 'gsub muted'; sub.textContent = lbl(i);
   };
   show(null);
   const chart = s.kind === 'line'
@@ -751,7 +752,7 @@ function graphCard(g, opts = {}) {
       opts.edit ? h('button', { class: 'gbtn', 'aria-label': 'Edit graph', onclick: opts.edit }, '•••') : null,
       opts.save ? h('button', { class: 'gbtn', onclick: (e) => { graphs.push({ ...g, id: Date.now().toString(36) }); saveGraphs(); e.target.textContent = 'Added'; e.target.disabled = true; } }, '+ Graphs') : null),
     big, sub, chart || h('div', { class: 'empty small' }, 'Not enough history yet'),
-    s.sets.length > 1 ? h('div', { class: 'legend' }, s.sets.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), `${x.l} · avg ${money(meanOf(x.v))}/${per}`))) : null,
+    s.sets.length > 1 ? h('div', { class: 'legend' }, s.sets.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), x.l))) : null,
     opts.edit ? h('div', { class: 'gper' }, [...GPERIODS.map(([p, l]) => [p, l]), ['Custom', 'Custom']].map(([p, pl]) => h('button', { class: 'chip' + (g.period === p ? ' on' : ''),
       onclick: () => { if (p === 'Custom') return opts.edit('Custom'); g.period = p; saveGraphs(); render(); } }, p === 'Custom' && g.period === 'Custom' ? periodLabel(g) : pl))) : null);
 }
