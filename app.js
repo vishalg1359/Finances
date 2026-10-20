@@ -556,7 +556,7 @@ function rangeBar(rerender) {
 }
 
 // ---------- Breakdowns (categories / merchants / paid with) ----------
-function breakdown(el, keyOf, labelOf, layout, icon, graphOf) {
+function breakdown(el, keyOf, labelOf, layout, icon) {
   if (!data || !data.connections.length) return noData(el);
   { const lb = loadingBanner(); if (lb) el.append(lb); }
   range = range || thisMonthRange();
@@ -589,7 +589,7 @@ function breakdown(el, keyOf, labelOf, layout, icon, graphOf) {
       h('div', { class: 'ccard-name' }, labelOf(g.k)), h('div', { class: 'ccard-amt' }, money(g.v)))));
     el.append(grid);
     const opened = sorted.filter((g) => open.has(g.k));
-    for (const g of opened) el.append(h('div', { class: 'card' }, h('h2', {}, labelOf(g.k)), graphOf ? graphCard(graphOf(g.k), { flat: true, save: true }) : null, sortBar(render), sortTx(g.l).map(txnRow)));
+    for (const g of opened) el.append(h('div', { class: 'card' }, h('h2', {}, labelOf(g.k)), sortBar(render), sortTx(g.l).map(txnRow)));
     return;
   }
   const card = h('div', { class: 'card list' });
@@ -599,21 +599,21 @@ function breakdown(el, keyOf, labelOf, layout, icon, graphOf) {
       icon(g), h('div', { class: 'grow' }, h('div', { class: 'name' }, labelOf(g.k)),
         h('div', { class: 'bar' }, h('i', { style: `width:${Math.max(2, (g.v / max) * 100)}%;background:${g.color}` }))),
       h('div', { class: 'amt' }, money(g.v, true))));
-    if (isOpen) card.append(h('div', { class: 'drill' }, graphOf ? graphCard(graphOf(g.k), { flat: true, save: true }) : null, sortBar(render), sortTx(g.l).map(txnRow)));
+    if (isOpen) card.append(h('div', { class: 'drill' }, sortBar(render), sortTx(g.l).map(txnRow)));
   }
   el.append(card);
 }
 const catBadge = (g) => h('div', { class: 'cat', style: `background:${g.color}22;color:${g.color}` }, nice(g.k)[0]);
-function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) => catName(k), 'donut', catBadge, (k) => ({ type: 'spend', cat: k, period: '1Y', by: 'month' })); }
+function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) => catName(k), 'donut', catBadge); }
 function viewMerchants(el) {
-  breakdown(el, (t) => t.name || 'Unknown', (k) => k, 'rows', (g) => logo(g.l[0]), (k) => ({ type: 'spend', merchant: k, period: '1Y', by: 'month' }));
+  breakdown(el, (t) => t.name || 'Unknown', (k) => k, 'rows', (g) => logo(g.l[0]));
   const subs = data && data.connections.length ? subscriptions() : [];
   if (subs.length) el.append(h('div', { class: 'card list tap', onclick: openRecurring }, h('h2', {}, 'Recurring', h('span', {}, money(subs.reduce((t, x) => t + x.monthly, 0), true) + '/mo')),
     subs.slice(0, 5).map((x) => h('div', { class: 'row' }, logo(x), h('div', { class: 'grow' }, h('div', { class: 'name' }, x.name), h('div', { class: 'sub' }, x.every)), h('div', { class: 'amt' }, money(x.amount, true))))));
 }
 function viewPaidWith(el) {
   const accs = Object.fromEntries(allAccounts().map((a) => [a.account_id, a]));
-  breakdown(el, (t) => t.account_id, (k) => (accs[k] ? accLabel(accs[k]) : 'Other'), 'cards', null, (k) => ({ type: 'spend', accts: [k], period: '1Y', by: 'month' }));
+  breakdown(el, (t) => t.account_id, (k) => (accs[k] ? accLabel(accs[k]) : 'Other'), 'cards', null);
 }
 
 // ---------- graphs ----------
@@ -673,6 +673,8 @@ function balanceAt(ids) {
     return any ? total : null;
   };
 }
+const gCats = (g) => g.cats || (g.cat ? [g.cat] : []);
+const gMerch = (g) => g.merchants || (g.merchant ? [g.merchant] : []);
 function series(g) {
   const { keys, by, from, to } = bucketKeys(g), idx = new Map(keys.map((k, i) => [k, i]));
   const ids = g.accts && g.accts.length ? new Set(g.accts) : null;
@@ -682,7 +684,11 @@ function series(g) {
     return v;
   };
   const base = { keys, by, from, to, kind: 'bars' };
-  if (g.type === 'spend') return { ...base, sets: [{ c: g.cat ? catColor(g.cat) : '#ff5a5f', v: sumBy(spending().filter((t) => (!g.cat || t.category === g.cat) && (!g.merchant || t.name === g.merchant)), 1) }] };
+  if (g.type === 'spend') {
+    const cs = new Set(gCats(g)), ms = new Set(gMerch(g)), any = !cs.size && !ms.size;
+    const c = cs.size === 1 && !ms.size ? catColor([...cs][0]) : '#ff5a5f';
+    return { ...base, sets: [{ c, v: sumBy(spending().filter((t) => any || cs.has(t.category) || ms.has(t.name)), 1) }] };
+  }
   if (g.type === 'income') return { ...base, sets: [{ c: '#1fd286', v: sumBy(income(), -1) }] };
   if (g.type === 'inout') return { ...base, sets: [{ c: '#1fd286', l: 'Income', v: sumBy(income(), -1) }, { c: '#ff5a5f', l: 'Spending', v: sumBy(spending(), 1) }] };
   if (g.type === 'networth') {
@@ -696,7 +702,8 @@ function gTitle(g) {
   if (g.title) return g.title;
   const accs = (g.accts || []).map((id) => everyAccount().find((a) => a.account_id === id)).filter(Boolean);
   const an = accs.length === 1 ? accs[0].name : accs.length ? accs.length + ' accounts' : '';
-  const base = g.type === 'spend' ? g.merchant || (g.cat ? catName(g.cat) : 'Spending') : (GTYPES.find((t) => t[0] === g.type) || [, ''])[1];
+  const items = [...gCats(g).map(catName), ...gMerch(g)];
+  const base = g.type === 'spend' ? (!items.length ? 'Spending' : items.slice(0, 2).join(' + ') + (items.length > 2 ? ` +${items.length - 2}` : '')) : (GTYPES.find((t) => t[0] === g.type) || [, ''])[1];
   if (g.type === 'balance') return an || 'Money you have';
   return an && g.type !== 'networth' ? base + ' · ' + an : base;
 }
@@ -766,20 +773,37 @@ function viewGraphs(el) {
   el.append(h('button', { class: 'btn', onclick: () => openGraphEditor(null) }, '+ Add graph'));
 }
 function openGraphEditor(orig, preset) {
-  const f = orig ? { ...orig, accts: [...(orig.accts || [])] } : { type: 'spend', period: '1Y', by: 'month', accts: [] };
+  const f = orig ? { ...orig, accts: [...(orig.accts || [])], cats: [...gCats(orig)], merchants: [...gMerch(orig)] } : { type: 'spend', period: '1Y', by: 'month', accts: [], cats: [], merchants: [] };
+  delete f.cat; delete f.merchant;
   if (preset === 'Custom') { f.period = 'Custom'; if (!f.from) { f.from = shiftDays(todayISO(), -364); f.to = todayISO(); } }
   const chips = (opts, key, cond) => h('div', { class: 'presets wrap' }, opts.filter(cond || (() => true)).map(([v, l]) =>
     h('button', { class: 'chip' + (f[key] === v ? ' on' : ''), onclick: () => { f[key] = v; if (v === 'Custom' && !f.from) { f.from = shiftDays(todayISO(), -364); f.to = todayISO(); } renderPanel(); } }, l)));
-  const pick = (label, key, options) => h('div', { class: 'field' }, h('label', {}, label),
-    h('select', { onchange: (e) => { f[key] = e.target.value || null; renderPanel(); } },
-      h('option', { value: '' }, 'All'), options.map(([v, l]) => h('option', { value: v, selected: f[key] === v ? true : null }, l))));
   openSheet({ title: orig ? 'Edit graph' : 'New graph', render: (el) => {
-    el.append(graphCard(f, { flat: true }));
+    const prev = h('div', {}, graphCard(f, { flat: true })), refresh = () => prev.replaceChildren(graphCard(f, { flat: true }));
+    el.append(prev);
+    el.append(h('div', { class: 'card' }, h('div', { class: 'field' }, h('label', {}, 'Name'),
+      h('input', { type: 'text', value: f.title || '', placeholder: gTitle({ ...f, title: '' }), oninput: (e) => { f.title = e.target.value.trim() || undefined; refresh(); } }))));
     el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Show'), chips(GTYPES, 'type')));
     if (f.type === 'spend') {
       const tot = {}; for (const t of spending()) if (t.amount > 0) { tot['c' + t.category] = (tot['c' + t.category] || 0) + t.amount; tot['m' + t.name] = (tot['m' + t.name] || 0) + t.amount; }
       const top = (p) => Object.keys(tot).filter((k) => k[0] === p).sort((a, b) => tot[b] - tot[a]).map((k) => k.slice(1));
-      el.append(h('div', { class: 'card' }, pick('Category', 'cat', top('c').map((c) => [c, catName(c)])), pick('Merchant', 'merchant', top('m').slice(0, 60).map((m) => [m, m]))));
+      const opts = [...top('c').map((k) => ['cats', k]), ...top('m').map((k) => ['merchants', k])];
+      const on = ([key, k]) => f[key].includes(k), list = h('div', {}), q = { v: '' };
+      const label = () => { const n = f.cats.length + f.merchants.length; return n ? `Includes ${n} · added together` : 'Includes · all spending'; };
+      const head = h('div', { class: 'label' }, label());
+      const row = (o) => { const [key, k] = o, tx = key === 'merchants' && spending().find((t) => t.name === k);
+        return h('label', { class: 'row tap' }, tx ? logo(tx) : catBadge({ k, color: catColor(k) }),
+          h('div', { class: 'grow' }, h('div', { class: 'name' }, key === 'cats' ? catName(k) : k), h('div', { class: 'sub' }, (key === 'cats' ? 'Category · ' : '') + money(tot[(key === 'cats' ? 'c' : 'm') + k] || 0) + ' all time')),
+          h('input', { type: 'checkbox', class: 'switch', checked: on(o) ? true : null, onchange: (e) => {
+            f[key] = e.target.checked ? [...f[key], k] : f[key].filter((x) => x !== k); head.textContent = label(); refresh(); } })); };
+      const draw = () => {
+        const s2 = q.v.toLowerCase(), hits = s2 ? opts.filter(([key, k]) => (key === 'cats' ? catName(k) : k).toLowerCase().includes(s2)).slice(0, 40)
+          : [...opts.filter(on), ...opts.filter((o) => !on(o) && o[0] === 'cats'), ...opts.filter((o) => !on(o) && o[0] === 'merchants').slice(0, 12)];
+        list.replaceChildren(...(hits.length ? hits.map(row) : [h('div', { class: 'empty small' }, 'No matches')]));
+      };
+      draw();
+      el.append(h('div', { class: 'card' }, head, h('div', { class: 'field' },
+        h('input', { type: 'search', placeholder: 'Search merchants or categories', oninput: (e) => { q.v = e.target.value; draw(); } })), list));
     }
     if (f.type !== 'networth') {
       const accs = everyAccount().filter((a) => (f.type === 'balance' ? true : f.type === 'income' ? !isDebt(a) : true));
@@ -793,7 +817,7 @@ function openGraphEditor(orig, preset) {
         h('input', { type: 'date', value: f[key], max: todayISO(), onchange: (e) => { if (e.target.value) { f[key] = e.target.value; if (f.from > f.to) [f.from, f.to] = [f.to, f.from]; renderPanel(); } } })))) : null,
       h('div', { class: 'label', style: 'margin-top:12px' }, 'Group by'), chips(GBY, 'by', ([v]) => v !== 'day' || daysBetween(gRange(f).from, gRange(f).to) <= 183)));
     const i = orig ? graphs.indexOf(orig) : -1;
-    const done = () => { if (f.type !== 'spend') { delete f.cat; delete f.merchant; } if (i >= 0) graphs[i] = f; else graphs.push({ ...f, id: Date.now().toString(36) }); saveGraphs(); closePanel(); render(); };
+    const done = () => { if (f.type !== 'spend') { delete f.cats; delete f.merchants; } if (i >= 0) graphs[i] = f; else graphs.push({ ...f, id: Date.now().toString(36) }); saveGraphs(); closePanel(); render(); };
     const move = (d) => { const j = i + d; if (j < 0 || j >= graphs.length) return; graphs.splice(i, 1); graphs.splice(j, 0, f); saveGraphs(); closePanel(); render(); };
     el.append(h('button', { class: 'btn primary', onclick: done }, orig ? 'Save' : 'Add graph'));
     if (i >= 0) el.append(h('div', { class: 'gmoves' }, h('button', { class: 'btn', disabled: i === 0 ? true : null, onclick: () => move(-1) }, 'Move up'),
