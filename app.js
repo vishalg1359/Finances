@@ -216,9 +216,12 @@ function payoff(balance, rate, payment) {
 // ---------- charts ----------
 const avgLine = (y, W, c, label, below) => `<line class="avg" x1="0" x2="${W}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${c}" stroke-width="1.3" stroke-dasharray="3 4" stroke-opacity=".8"/>` +
   (label ? `<text x="4" y="${(below ? y + 12 : Math.max(10, y - 5)).toFixed(1)}" font-size="10" font-weight="700" fill="${c}" style="paint-order:stroke;stroke:var(--card);stroke-width:3px">avg ${label}</text>` : '');
+const fullDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.slice(0, 4) === todayISO().slice(0, 4) ? undefined : 'numeric' });
+const rangeTxt = (f, t) => (f && t ? ` · ${fullDay(f)} – ${fullDay(t)}` : '');
 const PALETTE = ['#1fd286', '#4f8cff', '#ffb547', '#ff6b8b', '#a37bff', '#2fd0d6', '#ff8a4c', '#c3d84a', '#6b7280'];
 function lineChart(points, onScrub, avg) {
   if (points.length < 2) return null;
+  const last0 = points.length - 1;
   const W = 340, H = 140, vals = points.map((p) => p.v), lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
   const X = (i) => (i / (points.length - 1)) * W, Y = (v) => H - 12 - ((v - lo) / span) * (H - 24);
   const d = points.map((p, i) => (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.v).toFixed(1)).join(' ');
@@ -227,7 +230,7 @@ function lineChart(points, onScrub, avg) {
     `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".3"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>` +
     `<path class="area" d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id})"/>` +
     `<path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${col}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>` +
-    (avg ? avgLine(Y(vals.reduce((t, v) => t + v, 0) / vals.length), W, '#9aa0a6', money(vals.reduce((t, v) => t + v, 0) / vals.length)) : '') });
+    (avg ? avgLine(Y(vals.reduce((t, v) => t + v, 0) / vals.length), W, '#9aa0a6', money(vals.reduce((t, v) => t + v, 0) / vals.length) + rangeTxt(points[0].date, points[last0].date)) : '') });
   const pos = (i) => `left:${(X(i) / W) * 100}%;top:${(Y(points[i].v) / H) * 100}%`;
   const last = points.length - 1;
   const pulse = h('i', { class: 'pulse', style: pos(last) + `;--c:${col}` });
@@ -708,7 +711,7 @@ function linesChart(s, onScrub) {
   const svg = h('svg', { class: 'chart', viewBox: `0 0 ${W} ${H + 16}`, html:
     s.sets.map((x, j) => `<linearGradient id="${id}${j}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${x.c}" stop-opacity="${single ? 0.32 : 0.14}"/><stop offset="1" stop-color="${x.c}" stop-opacity="0"/></linearGradient>`).join('') +
     s.sets.map((x, j) => { const d = curve(x.v); return `<path class="area" d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id}${j})"/><path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${x.c}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`; }).join('') +
-    s.sets.map((x, j) => avgLine(Y(meanOf(x.v)), W, x.c, money(meanOf(x.v)), j > 0 && Math.abs(Y(meanOf(x.v)) - Y(meanOf(s.sets[0].v))) < 14)).join('') + ticks });
+    s.sets.map((x, j) => avgLine(Y(meanOf(x.v)), W, x.c, money(meanOf(x.v)) + ({ month: '/mo', week: '/wk', day: '/day' }[s.by] || '') + rangeTxt(s.from, s.to), j > 0 && Math.abs(Y(meanOf(x.v)) - Y(meanOf(s.sets[0].v))) < 14)).join('') + ticks });
   const pos = (i, x) => `left:${(X(i) / W) * 100}%;top:${(Y(x.v[i]) / (H + 16)) * 100}%;--c:${x.c}`;
   const last = n - 1, cursor = h('i', { class: 'cursor', hidden: true });
   const dots = s.sets.map((x) => h('i', { class: 'pulse', style: pos(last, x) }));
