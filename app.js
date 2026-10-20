@@ -374,46 +374,117 @@ function viewOverview(el) {
       h('div', {}, h('span', { class: 'sw posted' }), h('div', {}, h('b', {}, money(posted, true)), h('small', {}, 'Owed'))),
       h('div', {}, h('span', { class: 'sw pending' }), h('div', {}, h('b', {}, money(p, true)), h('small', {}, 'Pending'))),
       h('div', {}, h('div', {}, h('b', {}, money(posted + p, true)), h('small', {}, 'With pending')))));
-  const acctRow = (a, label, debt) => {
-    const pend = a.type === 'credit' ? pendingFor(a) : [], k = 'p:' + a.account_id, isOpen = open.has(k);
-    const posted = a.balances.current || 0, pAmt = pend.reduce((s, t) => s + t.amount, 0);
-    const amt = pend.length
-      ? h('div', { class: 'amts' }, h('div', { class: 'amt neg' }, money(posted, true)), h('div', { class: 'pend-amt' }, '+' + money(pAmt, true) + ' pending'))
-      : h('div', { class: 'amt' + (debt ? ' neg' : '') }, money(posted, true));
-    return [h('div', { class: 'row ' + (label ? 'grp' : 'acct') + (pend.length ? ' tap' : '') + (isOpen ? ' open' : ''), onclick: pend.length ? () => toggle(k) : null },
-      mark(a.brand, a.institution), h('div', { class: 'grow' }, h('div', { class: 'name' }, label || a.name, a.mask ? h('span', { class: 'mask' }, ' ' + a.mask) : null)),
-      amt, pend.length ? h('span', { class: 'chev' }, '›') : null),
-      isOpen ? h('div', { class: 'drill' }, split(posted, pAmt), pend.map(txnRow)) : null];
-  };
   // Vaults (e.g. SoFi) come through as "cash management" accounts next to an empty parent savings account.
   const vaultBanks = new Set(accs.filter((a) => a.subtype === 'savings').map((a) => a.institution));
   const isVault = (a) => a.subtype === 'cash management' && vaultBanks.has(a.institution);
   const hasVaults = new Set(accs.filter(isVault).map((a) => a.institution));
   const emptyParent = (a) => a.subtype === 'savings' && hasVaults.has(a.institution) && !a.balances.current;
-  const groups = [['Checking', (a) => a.subtype === 'checking'], ['Savings', (a) => (a.subtype === 'savings' && !emptyParent(a)) || isVault(a)],
-    ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage'], ['Credit cards', (a) => a.type === 'credit'], ['Loans', (a) => a.type === 'loan'],
-    ['Other', (a) => !isVault(a) && !['checking', 'savings'].includes(a.subtype) && !['investment', 'brokerage', 'credit', 'loan'].includes(a.type)]];
-  const card = h('div', { class: 'card accounts' });
   const alloc = [['Checking', (a) => a.subtype === 'checking', 'var(--good)'], ['Savings', (a) => a.subtype === 'savings' || isVault(a), '#4f8cff'],
     ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage', '#a37bff']]
     .map(([l, f, c]) => ({ l, c, v: sum(have.filter(f)) })).filter((x) => x.v > 0);
   const allocTotal = alloc.reduce((s, x) => s + x.v, 0);
-  if (alloc.length > 1) card.append(h('div', { class: 'alloc' },
+  if (alloc.length > 1) el.append(h('div', { class: 'card alloc' },
     h('div', { class: 'allocbar' }, alloc.map((x) => h('i', { style: `flex:${x.v};background:${x.c}` }))),
     h('div', { class: 'allockey' }, alloc.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), x.l, h('b', {}, Math.round((x.v / allocTotal) * 100) + '%'))))));
-  for (const [label, test] of groups) {
-    const list = accs.filter(test);
-    const extra = label === 'Loans' ? manual : [];
-    if (!list.length && !extra.length) continue;
-    const debt = label === 'Credit cards' || label === 'Loans';
-    if (list.length === 1 && !extra.length) { card.append(...acctRow(list[0], debt ? list[0].name : label, debt).filter(Boolean)); continue; }
-    card.append(h('div', { class: 'row grp' }, h('div', { class: 'grow' }, label),
-      h('div', { class: 'amt' + (debt ? ' neg' : '') }, money(sum(list) + extra.reduce((s, x) => s + x.bal, 0), true))));
-    list.sort((a, b) => (b.balances.current || 0) - (a.balances.current || 0)).forEach((a) => card.append(...acctRow(a).filter(Boolean)));
-    for (const { l, bal } of extra) card.append(h('div', { class: 'row acct tap', onclick: () => openPanel('loans') },
-      mark(null, l.name), h('div', { class: 'grow' }, h('div', { class: 'name' }, l.name, h('span', { class: 'mask' }, ' est.'))), h('div', { class: 'amt' }, money(bal, true))));
+  if (accs.length || manual.length) el.append(accountGrid(accs.filter((a) => !emptyParent(a)), manual, pendingFor, split));
+}
+
+
+// ---------- account boxes (Overview) ----------
+let layout = store.get('layout', { order: [], size: {}, groups: {} });
+let editing = false, picked = new Set(), dragId = null, detailId = null;
+const saveLayout = () => store.set('layout', layout);
+const SIZES = [[1, 1], [2, 1], [1, 2], [2, 2]];
+const typeRank = (a) => (a.subtype === 'checking' ? 0 : ['savings', 'cash management'].includes(a.subtype) ? 1 : ['investment', 'brokerage'].includes(a.type) ? 2 : a.type === 'credit' ? 3 : a.type === 'loan' ? 4 : 5);
+function accountGrid(accs, manual, pendingFor, split) {
+  const items = {};
+  for (const a of accs) items[a.account_id] = { id: a.account_id, a, name: a.name, value: a.balances.current || 0, debt: isDebt(a), rank: typeRank(a),
+    pend: a.type === 'credit' ? pendingFor(a).reduce((s, t) => s + t.amount, 0) : 0, mark: mark(a.brand, a.institution), sub: (a.mask ? '••' + a.mask : '') };
+  for (const { l, bal } of manual) items['loan:' + l.id] = { id: 'loan:' + l.id, loan: l, name: l.name, value: bal, debt: true, rank: 4, pend: 0, mark: mark(null, l.name), sub: 'estimated' };
+  const inGroup = new Set(Object.values(layout.groups).flatMap((g) => g.members));
+  for (const id of Object.keys(items).sort((x, y) => items[x].rank - items[y].rank)) if (!layout.order.includes(id)) layout.order.push(id);
+  for (const [gid, g] of Object.entries(layout.groups)) {
+    const ms = g.members.map((m) => items[m]).filter(Boolean);
+    if (!ms.length) continue;
+    const net = ms.reduce((s, m) => s + (m.debt ? -m.value : m.value), 0);
+    items['g:' + gid] = { id: 'g:' + gid, gid, group: g, members: ms, name: g.name, value: Math.abs(net), debt: net < 0, pend: ms.reduce((s, m) => s + m.pend, 0),
+      mark: h('div', { class: 'stack' }, ms.slice(0, 3).map((m) => m.mark.cloneNode(true))), sub: ms.length + ' accounts' };
   }
-  if (card.childNodes.length) el.append(card);
+  saveLayout();
+  const tiles = () => layout.order.filter((id) => items[id] && !inGroup.has(id));
+  const wrap = h('div', { class: 'agrid-wrap' });
+  const recent = (ids, n) => allTxns().filter((t) => ids.includes(t.account_id)).sort((x, y) => (x.date < y.date ? 1 : -1)).slice(0, n);
+  const idsOf = (t) => (t.members ? t.members.map((m) => m.id) : [t.id]);
+  const extra = (t) => t.members
+    ? h('div', { class: 'mini' }, t.members.slice(0, 4).map((m) => h('div', {}, h('span', {}, m.name), h('b', { class: m.debt ? 'neg' : '' }, money(m.value)))))
+    : t.loan ? null : h('div', { class: 'mini' }, recent([t.id], 3).map((x) => h('div', {}, h('span', {}, x.name), h('b', { class: x.amount < 0 ? 'pos' : 'neg' }, (x.amount < 0 ? '+' : '−') + money(Math.abs(x.amount))))));
+  const tileEl = (t) => {
+    const [w, hh] = layout.size[t.id] || [1, 1];
+    const onclick = () => {
+      if (editing) { picked.has(t.id) ? picked.delete(t.id) : picked.add(t.id); draw(); return; }
+      if (t.loan) return openPanel('loans');
+      detailId = detailId === t.id ? null : t.id; draw();
+    };
+    return h('div', { class: 'atile' + (editing ? ' editing' : '') + (picked.has(t.id) ? ' picked' : '') + (dragId === t.id ? ' dragging' : '') + (detailId === t.id ? ' open' : '') + (t.members ? ' group' : ''),
+      'data-id': t.id, style: `grid-column:span ${w};grid-row:span ${hh}`, onclick },
+      h('div', { class: 'atile-top' }, t.mark, h('div', { class: 'atile-name' }, t.name)),
+      h('div', { class: 'atile-amt fit' + (t.debt ? ' neg' : '') + (w === 2 ? ' wide' : '') }, money(t.value, w === 2)),
+      t.pend ? h('div', { class: 'pend-amt' }, '+' + money(t.pend, true) + ' pending') : h('div', { class: 'atile-sub' }, t.sub),
+      hh === 2 ? extra(t) : null,
+      editing ? h('button', { class: 'tbtn size', 'aria-label': 'Resize', onclick: (e) => { e.stopPropagation(); const i = SIZES.findIndex(([a, b]) => a === w && b === hh); layout.size[t.id] = SIZES[(i + 1) % SIZES.length]; saveLayout(); draw(); } },
+        h('svg', { viewBox: '0 0 24 24', html: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' })) : null,
+      editing ? h('div', { class: 'tbtn handle', 'aria-label': 'Move', onpointerdown: (e) => startDrag(e, t.id) }, h('svg', { viewBox: '0 0 24 24', html: '<g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g>' })) : null);
+  };
+  const startDrag = (e, id) => {
+    e.preventDefault(); e.stopPropagation(); dragId = id;
+    const tile = e.currentTarget.closest('.atile'), grid = tile.parentNode;
+    tile.classList.add('dragging');
+    const move = (ev) => {
+      if (ev.clientY < 110) scrollBy(0, -12); else if (ev.clientY > innerHeight - 140) scrollBy(0, 12);
+      const under = document.elementFromPoint(ev.clientX, ev.clientY), tgt = under && under.closest('.atile');
+      if (!tgt || tgt === tile || tgt.parentNode !== grid) return;
+      const kids = [...grid.children], after = kids.indexOf(tile) < kids.indexOf(tgt);
+      grid.insertBefore(tile, after ? tgt.nextSibling : tgt);
+    };
+    const up = () => {
+      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
+      const shown = [...grid.children].map((n) => n.dataset.id), slots = layout.order.map((x, i) => (shown.includes(x) ? i : -1)).filter((i) => i >= 0);
+      slots.forEach((slot, k) => { layout.order[slot] = shown[k]; });
+      dragId = null; saveLayout(); draw();
+    };
+    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
+  };
+  const groupPicked = () => {
+    const sel = [...picked].map((id) => items[id]).filter(Boolean), name = prompt('Name this group', sel.find((t) => t.group)?.name || 'Group');
+    if (name == null) return;
+    const members = [...new Set(sel.flatMap((t) => (t.members ? t.members.map((m) => m.id) : [t.id])))];
+    for (const t of sel) if (t.gid) delete layout.groups[t.gid];
+    const gid = Date.now().toString(36), at = Math.min(...sel.map((t) => layout.order.indexOf(t.id)).filter((i) => i >= 0));
+    layout.groups[gid] = { name: name.trim() || 'Group', members }; layout.order.splice(at, 0, 'g:' + gid); layout.size['g:' + gid] = [2, 1];
+    picked.clear(); saveLayout(); render();
+  };
+  const ungroup = () => { for (const id of picked) if (items[id] && items[id].gid) delete layout.groups[items[id].gid]; picked.clear(); saveLayout(); render(); };
+  const rename = () => { const t = items[[...picked][0]], n = prompt('Rename group', t.name); if (n) { layout.groups[t.gid].name = n.trim() || t.name; saveLayout(); render(); } };
+  const draw = () => {
+    const sel = [...picked].map((id) => items[id]).filter(Boolean), groupsSel = sel.filter((t) => t.gid);
+    const d = detailId && items[detailId];
+    wrap.replaceChildren(...[
+      h('div', { class: 'sechead' }, h('h2', {}, 'Accounts'), h('button', { class: 'edit-btn' + (editing ? ' on' : ''), onclick: () => { editing = !editing; picked.clear(); detailId = null; render(); } }, editing ? 'Done' : 'Edit')),
+      editing ? h('div', { class: 'edit-hint' }, 'Drag ⠿ to move · ⤢ to resize · tap boxes to select') : null,
+      h('div', { class: 'agrid' }, tiles().map((id) => tileEl(items[id]))),
+      d && !editing ? h('div', { class: 'card detail' }, h('h2', {}, d.name, h('span', { class: d.debt ? 'neg' : '' }, money(d.value, true))),
+        d.a && d.a.type === 'credit' && d.pend ? split(d.value, d.pend) : null,
+        d.members ? d.members.map((m) => h('div', { class: 'row' }, m.mark.cloneNode(true), h('div', { class: 'grow' }, h('div', { class: 'name' }, m.name)), h('div', { class: 'amt' + (m.debt ? ' neg' : '') }, money(m.value, true)))) : null,
+        recent(idsOf(d), 8).map(txnRow)) : null,
+      editing ? h('div', { class: 'editbar' },
+        h('button', { class: 'btn', disabled: sel.length < 2 ? true : null, onclick: groupPicked }, sel.length >= 2 ? `Group ${sel.length}` : 'Group'),
+        groupsSel.length ? h('button', { class: 'btn', onclick: ungroup }, 'Ungroup') : null,
+        groupsSel.length === 1 && sel.length === 1 ? h('button', { class: 'btn', onclick: rename }, 'Rename') : null,
+        h('button', { class: 'btn primary', onclick: () => { editing = false; picked.clear(); render(); } }, 'Done')) : null].filter(Boolean));
+    fitText();
+  };
+  draw();
+  return wrap;
 }
 
 // ---------- date range (spending tabs) ----------
@@ -661,7 +732,7 @@ function showView(name) {
 }
 // Swipe sideways on the page to move between connections.
 let touch = null;
-$('view').addEventListener('touchstart', (e) => { touch = e.target.closest('svg, .chips') ? null : { x: e.touches[0].clientX, y: e.touches[0].clientY }; }, { passive: true });
+$('view').addEventListener('touchstart', (e) => { touch = e.target.closest('svg, .chips, .agrid-wrap.editing, .editing') ? null : { x: e.touches[0].clientX, y: e.touches[0].clientY }; }, { passive: true });
 $('view').addEventListener('touchend', (e) => {
   if (!touch || !data || data.connections.length < 2) return;
   const dx = e.changedTouches[0].clientX - touch.x, dy = e.changedTouches[0].clientY - touch.y; touch = null;
