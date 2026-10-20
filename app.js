@@ -18,7 +18,7 @@ let lastSync = 0, syncing = null, pollTimer = null, pollCount = 0;
 
 const $ = (id) => document.getElementById(id);
 function h(tag, attrs, ...kids) {
-  const el = document.createElement(tag);
+  const el = tag === 'svg' ? document.createElementNS('http://www.w3.org/2000/svg', 'svg') : document.createElement(tag);
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
@@ -185,14 +185,17 @@ function payoff(balance, rate, payment) {
 }
 
 // ---------- charts ----------
-function lineChart(points) {
+function lineChart(points, tall) {
   if (points.length < 2) return null;
-  const W = 320, H = 110, vals = points.map((p) => p.v), lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
-  const xy = points.map((p, i) => [(i / (points.length - 1)) * W, H - 8 - ((p.v - lo) / span) * (H - 16)]);
+  const W = 340, H = tall ? 150 : 100, vals = points.map((p) => p.v), lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const xy = points.map((p, i) => [(i / (points.length - 1)) * W, H - 10 - ((p.v - lo) / span) * (H - 20)]);
   const d = xy.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
-  const up = vals[vals.length - 1] >= vals[0], col = up ? 'var(--good)' : 'var(--bad)';
-  return h('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, html:
-    `<path d="${d} L ${W} ${H} L 0 ${H} Z" fill="${col}" opacity=".12"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2.5" stroke-linejoin="round"/>` });
+  const up = vals[vals.length - 1] >= vals[0], col = up ? 'var(--good)' : 'var(--bad)', id = 'g' + Math.random().toString(36).slice(2, 7);
+  const [lx, ly] = xy[xy.length - 1];
+  return h('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', html:
+    `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${up ? '#1fd286' : '#ff5a5f'}" stop-opacity=".28"/><stop offset="1" stop-color="${up ? '#1fd286' : '#ff5a5f'}" stop-opacity="0"/></linearGradient></defs>` +
+    `<path d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id})"/><path d="${d}" fill="none" stroke="${col}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>` +
+    `<circle cx="${lx}" cy="${ly}" r="4" fill="${col}"/>` });
 }
 function barChart(months, values, onPick, selected) {
   const W = 320, H = 120, max = Math.max(1, ...values), bw = W / months.length;
@@ -200,7 +203,7 @@ function barChart(months, values, onPick, selected) {
   svg.innerHTML = months.map((m, i) => {
     const bh = (values[i] / max) * (H - 4), on = m === selected;
     return `<g data-m="${m}"><rect x="${i * bw}" y="0" width="${bw}" height="${H + 16}" fill="transparent"/>` +
-      `<rect x="${i * bw + bw * 0.18}" y="${H - bh}" width="${bw * 0.64}" height="${Math.max(bh, 1)}" rx="3" fill="${on ? 'var(--accent)' : '#3a3c44'}"/>` +
+      `<rect x="${i * bw + bw * 0.18}" y="${H - bh}" width="${bw * 0.64}" height="${Math.max(bh, 1)}" rx="3" fill="${on ? 'var(--accent)' : 'var(--bar)'}"/>` +
       `<text x="${i * bw + bw / 2}" y="${H + 13}" font-size="10" text-anchor="middle" fill="${on ? 'var(--fg)' : 'var(--muted)'}">${monthName(m)[0]}</text></g>`;
   }).join('');
   svg.addEventListener('click', (e) => { const g = e.target.closest('g'); if (g) onPick(g.dataset.m); });
@@ -215,7 +218,7 @@ const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const txnRow = (t, accName) => h('div', { class: 'row' }, logo(t), h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name),
   h('div', { class: 'sub' }, dayName(t.date) + (accName && accName[t.account_id] ? ' · ' + accName[t.account_id] : '') + (t.pending ? ' · pending' : ''))),
   h('div', { class: 'amt' + (t.amount < 0 ? ' pos' : '') }, (t.amount < 0 ? '+' : '') + money(Math.abs(t.amount), true)));
-const accRow = (a) => h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, accLabel(a)),
+const accRow = (a) => h('div', { class: 'row acct' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, accLabel(a)),
   h('div', { class: 'sub' }, (conn === 'all' && a.institution ? a.institution + ' · ' : '') + nice(a.subtype || a.type))),
   h('div', { class: 'amt' }, money(a.balances.current || 0, true)));
 function loadingBanner() {
@@ -235,42 +238,47 @@ function monthPicker(months, values, rerender) {
 // ---------- Overview ----------
 function viewOverview(el) {
   if (!data || !data.connections.length) { noData(el); if (!loans.length) return; }
-  el.append(loadingBanner());
+  { const lb = loadingBanner(); if (lb) el.append(lb); }
   const accs = allAccounts(), have = accs.filter((a) => !isDebt(a)), owe = accs.filter(isDebt);
   const sum = (l) => l.reduce((s, a) => s + (a.balances.current || 0), 0);
   const manual = conn === 'all' ? loans.map((l) => ({ l, bal: loanStatus(l).balance })) : [];
-  const haveTotal = sum(have), oweTotal = sum(owe) + manual.reduce((s, m) => s + m.bal, 0);
-  el.append(h('div', { class: 'split' },
-    h('div', { class: 'card' }, h('h2', {}, 'You have'), h('div', { class: 'amt hero pos' }, money(haveTotal))),
-    h('div', { class: 'card' }, h('h2', {}, 'You owe'), h('div', { class: 'amt hero neg' }, money(oweTotal)))));
+  const haveTotal = sum(have), oweTotal = sum(owe) + manual.reduce((s, m) => s + m.bal, 0), net = haveTotal - oweTotal;
+  const hist = conn === 'all' && data ? data.history.map((p) => ({ v: p.assets - p.debts })) : [];
+  if (hist.length) hist[hist.length - 1] = { v: net };
+  const first = hist.length > 1 ? hist[0].v : null, delta = first == null ? null : net - first;
+  const name = conn === 'all' ? 'Net worth' : ((shownConns()[0] || {}).institution || 'Bank') + ' net balance';
+  el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, name),
+    h('div', { class: 'hero-num fit' }, money(net, true)),
+    delta == null ? null : h('div', { class: 'change ' + (delta >= 0 ? 'pos' : 'neg') }, `${delta >= 0 ? '▲' : '▼'} ${money(Math.abs(delta), true)} `,
+      h('span', { class: 'muted' }, 'since ' + dayName(data.history[0].date))),
+    lineChart(hist, true)));
+  el.append(h('div', { class: 'tiles' },
+    h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }), 'You have'), h('div', { class: 'tile-num fit' }, money(haveTotal))),
+    h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'), h('div', { class: 'tile-num fit' }, money(oweTotal)))));
   const byKind = (list, kinds) => kinds.map(([label, test]) => [label, list.filter(test)]).filter(([, l]) => l.length);
   const haveGroups = byKind(have, [['Checking', (a) => a.subtype === 'checking'], ['Savings', (a) => a.subtype === 'savings'],
     ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage'],
     ['Other cash', (a) => a.subtype !== 'checking' && a.subtype !== 'savings' && a.type !== 'investment' && a.type !== 'brokerage']]);
   const oweGroups = byKind(owe, [['Credit cards', (a) => a.type === 'credit'], ['Loans', (a) => a.type === 'loan']]);
-  const groupCard = (title, groups, extra) => h('div', { class: 'card' }, h('h2', {}, title),
+  const groupCard = (title, total, cls, groups, extra) => h('div', { class: 'card' }, h('h2', {}, title, h('span', { class: cls }, money(total, true))),
     groups.map(([label, list]) => [h('div', { class: 'row grp' }, h('div', { class: 'grow' }, label), h('div', { class: 'amt' }, money(sum(list), true))),
       list.sort((a, b) => (b.balances.current || 0) - (a.balances.current || 0)).map(accRow)]), extra);
-  if (haveGroups.length) el.append(groupCard('Money you have', haveGroups));
-  if (oweGroups.length || manual.length) el.append(groupCard('Money you owe', oweGroups, manual.length ? [
+  if (haveGroups.length) el.append(groupCard('Money you have', haveTotal, 'pos', haveGroups));
+  if (oweGroups.length || manual.length) el.append(groupCard('Money you owe', oweTotal, 'neg', oweGroups, manual.length ? [
     h('div', { class: 'row grp' }, h('div', { class: 'grow' }, 'Tracked loans'), h('div', { class: 'amt' }, money(manual.reduce((s, m) => s + m.bal, 0), true))),
-    manual.map(({ l, bal }) => h('div', { class: 'row tap', onclick: () => openPanel('loans') }, h('div', { class: 'grow' }, h('div', { class: 'name' }, l.name),
+    manual.map(({ l, bal }) => h('div', { class: 'row acct tap', onclick: () => openPanel('loans') }, h('div', { class: 'grow' }, h('div', { class: 'name' }, l.name),
       h('div', { class: 'sub' }, 'Estimated · tap for details')), h('div', { class: 'amt' }, money(bal, true))))] : null));
-  const t = totals();
-  const hist = conn === 'all' && data ? data.history.map((p) => ({ v: p.assets - p.debts })) : [];
-  if (hist.length) hist[hist.length - 1] = { v: t.net };
-  el.append(h('div', { class: 'card' }, h('h2', {}, 'Net worth'), h('div', { class: 'big' }, money(t.net)), lineChart(hist)));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0, earned = byMonth(income())[m] || 0;
   el.append(h('div', { class: 'card' }, h('h2', {}, monthName(m, true)),
     h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Spent'), h('div', { class: 'amt' }, money(spent))),
     h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Came in'), h('div', { class: 'amt pos' }, money(earned)))));
-  if (data && data.synced) el.append(h('p', { class: 'muted', style: 'text-align:center;font-size:13px' }, 'Updated ' + new Date(data.synced).toLocaleString()));
+  if (data && data.synced) el.append(h('p', { class: 'foot' }, 'Updated ' + new Date(data.synced).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })));
 }
 
 // ---------- Breakdowns (categories / merchants / paid with) ----------
 function breakdown(el, keyOf, labelOf, icon, rerender) {
   if (!data || !data.connections.length) return noData(el);
-  el.append(loadingBanner());
+  { const lb = loadingBanner(); if (lb) el.append(lb); }
   const list = spending();
   if (!list.length) { el.append(h('div', { class: 'empty' }, 'No spending yet.')); return; }
   const months = lastMonths(12), per = byMonth(list);
@@ -279,7 +287,7 @@ function breakdown(el, keyOf, labelOf, icon, rerender) {
   const total = inMonth.reduce((s, t) => s + t.amount, 0);
   const prev = months[months.indexOf(month) - 1], prevTotal = prev ? per[prev] || 0 : 0;
   const diff = prevTotal ? ((total - prevTotal) / prevTotal) * 100 : null;
-  el.append(h('div', { class: 'card' }, h('h2', {}, 'Spent in ' + monthName(month, true)), h('div', { class: 'big' }, money(total)),
+  el.append(h('div', { class: 'card' }, h('h2', {}, 'Spent in ' + monthName(month, true)), h('div', { class: 'big fit' }, money(total, true)),
     diff == null ? null : h('div', { class: 'sub ' + (diff > 0 ? 'neg' : 'pos') }, `${diff > 0 ? '▲' : '▼'} ${Math.abs(diff).toFixed(0)}% vs ${monthName(prev)}`), picker));
   const groups = {};
   for (const t of inMonth) (groups[keyOf(t)] = groups[keyOf(t)] || []).push(t);
@@ -293,13 +301,16 @@ function breakdown(el, keyOf, labelOf, icon, rerender) {
       icon ? icon(l[0]) : null,
       h('div', { class: 'grow' }, h('div', { class: 'name' }, labelOf(k, l[0])),
         h('div', { class: 'sub' }, `${l.length} ${l.length === 1 ? 'purchase' : 'purchases'} · ${Math.round((v / total) * 100)}%`),
-        h('div', { class: 'bar' }, h('i', { style: `width:${(v / top) * 100}%` }))),
+        h('div', { class: 'bar' }, h('i', { style: `width:${(v / top) * 100}%` + (icon === catBadge ? `;background:${catBadge(l[0]).style.color}` : '') }))),
       h('div', { class: 'amt' }, money(v, true)), h('span', { class: 'chev' }, '›')));
     if (isOpen) card.append(h('div', { class: 'drill' }, l.sort((a, b) => (a.date < b.date ? 1 : -1)).map((t) => txnRow(t, accName))));
   }
   el.append(card);
 }
-function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) => nice(k), null, render); }
+const CAT_HUES = ['#1fd286', '#4f8cff', '#ffb547', '#ff6b8b', '#a37bff', '#2fd0d6', '#ff8a4c', '#c3d84a'];
+const catBadge = (t) => { const k = t.category || 'OTHER', i = [...k].reduce((a, c) => a + c.charCodeAt(0), 0) % CAT_HUES.length;
+  return h('div', { class: 'cat', style: `background:${CAT_HUES[i]}22;color:${CAT_HUES[i]}` }, nice(k)[0]); };
+function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) => nice(k), catBadge, render); }
 function viewMerchants(el) {
   breakdown(el, (t) => t.name || 'Unknown', (k) => k, logo, render);
   const subs = data && data.connections.length ? subscriptions() : [];
@@ -315,7 +326,7 @@ function viewPaidWith(el) {
 // ---------- Cash flow ----------
 function viewCashflow(el) {
   if (!data || !data.connections.length) return noData(el);
-  el.append(loadingBanner());
+  { const lb = loadingBanner(); if (lb) el.append(lb); }
   const months = lastMonths(12), out = byMonth(spending()), inc = byMonth(income());
   if (!months.some((m) => out[m] || inc[m])) { el.append(h('div', { class: 'empty' }, 'No activity yet.')); return; }
   const W = 320, H = 120, max = Math.max(1, ...months.flatMap((m) => [out[m] || 0, inc[m] || 0])), bw = W / months.length;
@@ -327,7 +338,7 @@ function viewCashflow(el) {
       `<text x="${x + bw / 2}" y="${H + 13}" font-size="10" text-anchor="middle" fill="var(--muted)">${monthName(m)[0]}</text>`;
   }).join('');
   const sumIn = months.reduce((s, m) => s + (inc[m] || 0), 0), sumOut = months.reduce((s, m) => s + (out[m] || 0), 0);
-  el.append(h('div', { class: 'card' }, h('h2', {}, 'Last 12 months'), h('div', { class: 'big ' + (sumIn - sumOut >= 0 ? 'pos' : 'neg') }, (sumIn - sumOut >= 0 ? '+' : '') + money(sumIn - sumOut)),
+  el.append(h('div', { class: 'card' }, h('h2', {}, 'Last 12 months'), h('div', { class: 'big fit ' + (sumIn - sumOut >= 0 ? 'pos' : 'neg') }, (sumIn - sumOut >= 0 ? '+' : '') + money(sumIn - sumOut)),
     h('div', { class: 'sub muted' }, `${money(sumIn)} in · ${money(sumOut)} spent`), svg,
     h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'background:var(--good)' }), 'In'), h('span', {}, h('i', { style: 'background:var(--bad)' }), 'Spent'))));
   el.append(h('div', { class: 'card' }, h('h2', {}, 'By month'), months.slice().reverse().filter((m) => out[m] || inc[m]).map((m) => {
@@ -434,8 +445,24 @@ function render(anim) {
   $('title').textContent = TITLES[view];
   const el = $('view'); el.replaceChildren();
   VIEWS[view](el);
+  fitText();
   if (anim) { el.classList.remove('slide-l', 'slide-r', 'fade'); void el.offsetWidth; el.classList.add(anim); }
   renderPanel();
+}
+// Big numbers shrink to fit their box instead of running off the screen.
+function fitText() {
+  requestAnimationFrame(() => {
+    for (const n of document.querySelectorAll('.fit')) {
+      n.style.fontSize = '';
+      let size = parseFloat(getComputedStyle(n).fontSize);
+      while (n.scrollWidth > n.clientWidth && size > 14) n.style.fontSize = (size -= 1) + 'px';
+    }
+  });
+}
+addEventListener('resize', fitText);
+// iOS home-screen apps can start with a too-short viewport until the page scrolls once.
+function nudgeViewport() {
+  for (const t of [50, 300, 900]) setTimeout(() => { const y = scrollY; scrollTo(0, y + 2); requestAnimationFrame(() => scrollTo(0, y)); }, t);
 }
 function setTab() { for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.view === view); }
 function showView(name) {
@@ -456,7 +483,7 @@ $('view').addEventListener('touchend', (e) => {
 // ---------- login ----------
 function logout() { store.del('pass'); store.del('data'); data = null; showLogin(); }
 function showLogin() { $('main').hidden = true; $('tabbar').hidden = true; $('login').hidden = false; $('login-url').value = store.get('server', DEFAULT_SERVER); }
-function showApp() { $('login').hidden = true; $('main').hidden = false; $('tabbar').hidden = false; view = 'overview'; setTab(); render(); }
+function showApp() { $('login').hidden = true; $('main').hidden = false; $('tabbar').hidden = false; view = 'overview'; setTab(); render(); nudgeViewport(); }
 $('login-btn').addEventListener('click', async () => {
   store.set('server', $('login-url').value.trim()); store.set('pass', $('login-pass').value);
   $('login-err').textContent = '';
