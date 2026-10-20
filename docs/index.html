@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Finances">
+<meta name="theme-color" content="#0f1012">
+<title>Finances</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <h1>Finances</h1>
+  <p class="muted">Enter your password to load your accounts.</p>
+  <input id="login-url" type="url" placeholder="Server URL" autocomplete="off">
+  <input id="login-pass" type="password" placeholder="Password" autocomplete="current-password">
+  <button id="login-btn" class="btn primary">Unlock</button>
+  <p id="login-err" class="err"></p>
+</div>
+<main id="main" hidden>
+  <header class="top"><h1 id="title">Overview</h1><button id="sync-btn" class="ibtn" aria-label="Sync">↻</button></header>
+  <section id="view-overview" class="view active"></section>
+  <section id="view-spending" class="view"></section>
+  <section id="view-activity" class="view"></section>
+  <section id="view-loans" class="view"></section>
+  <section id="view-settings" class="view"></section>
+</main>
+<nav class="tabbar" id="tabbar" hidden>
+  <button class="tab active" data-view="overview"><span class="ti">◎</span>Overview</button>
+  <button class="tab" data-view="spending"><span class="ti">▤</span>Spending</button>
+  <button class="tab" data-view="activity"><span class="ti">≡</span>Activity</button>
+  <button class="tab" data-view="loans"><span class="ti">⌂</span>Loans</button>
+  <button class="tab" data-view="settings"><span class="ti">⚙</span>Settings</button>
+</nav>
+<div id="toast" class="toast" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
