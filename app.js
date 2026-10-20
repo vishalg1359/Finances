@@ -207,8 +207,9 @@ function payoff(balance, rate, payment) {
 }
 
 // ---------- charts ----------
+const avgLine = (y, W, c) => `<line class="avg" x1="0" x2="${W}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${c}" stroke-width="1.3" stroke-dasharray="3 4" stroke-opacity=".8"/>`;
 const PALETTE = ['#1fd286', '#4f8cff', '#ffb547', '#ff6b8b', '#a37bff', '#2fd0d6', '#ff8a4c', '#c3d84a', '#6b7280'];
-function lineChart(points, onScrub) {
+function lineChart(points, onScrub, avg) {
   if (points.length < 2) return null;
   const W = 340, H = 140, vals = points.map((p) => p.v), lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
   const X = (i) => (i / (points.length - 1)) * W, Y = (v) => H - 12 - ((v - lo) / span) * (H - 24);
@@ -217,7 +218,8 @@ function lineChart(points, onScrub) {
   const svg = h('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, html:
     `<defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".3"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>` +
     `<path class="area" d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id})"/>` +
-    `<path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${col}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>` });
+    `<path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${col}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>` +
+    (avg ? avgLine(Y(vals.reduce((t, v) => t + v, 0) / vals.length), W, '#9aa0a6') : '') });
   const pos = (i) => `left:${(X(i) / W) * 100}%;top:${(Y(points[i].v) / H) * 100}%`;
   const last = points.length - 1;
   const pulse = h('i', { class: 'pulse', style: pos(last) + `;--c:${col}` });
@@ -551,7 +553,7 @@ function breakdown(el, keyOf, labelOf, layout, icon, graphOf) {
       h('div', { class: 'ccard-name' }, labelOf(g.k)), h('div', { class: 'ccard-amt' }, money(g.v)))));
     el.append(grid);
     const opened = sorted.filter((g) => open.has(g.k));
-    for (const g of opened) el.append(h('div', { class: 'card' }, h('h2', {}, labelOf(g.k)), graphOf ? graphCard(graphOf(g.k), { flat: true, save: true }) : null, g.l.sort((a, b) => (a.date < b.date ? 1 : -1)).map(txnRow)));
+    for (const g of opened) el.append(h('div', { class: 'card' }, h('h2', {}, labelOf(g.k)), graphOf ? graphCard(graphOf(g.k), { flat: true, save: true }) : null, sortBar(render), sortTx(g.l).map(txnRow)));
     return;
   }
   const card = h('div', { class: 'card list' });
@@ -561,7 +563,7 @@ function breakdown(el, keyOf, labelOf, layout, icon, graphOf) {
       icon(g), h('div', { class: 'grow' }, h('div', { class: 'name' }, labelOf(g.k)),
         h('div', { class: 'bar' }, h('i', { style: `width:${Math.max(2, (g.v / max) * 100)}%;background:${g.color}` }))),
       h('div', { class: 'amt' }, money(g.v, true))));
-    if (isOpen) card.append(h('div', { class: 'drill' }, graphOf ? graphCard(graphOf(g.k), { flat: true, save: true }) : null, g.l.sort((a, b) => (a.date < b.date ? 1 : -1)).map(txnRow)));
+    if (isOpen) card.append(h('div', { class: 'drill' }, graphOf ? graphCard(graphOf(g.k), { flat: true, save: true }) : null, sortBar(render), sortTx(g.l).map(txnRow)));
   }
   el.append(card);
 }
@@ -588,17 +590,23 @@ const saveGraphs = () => store.set('graphs', graphs);
 const everyAccount = () => (data ? data.connections : []).flatMap((c) => (c.accounts || []).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
 const weekStart = (iso) => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return isoOf(d); };
 const bucketOf = (by, iso) => (by === 'month' ? monthKey(iso) : by === 'week' ? weekStart(iso) : iso);
-const bucketEnd = (by, k) => {
+const bucketEnd = (by, k, to = todayISO()) => {
   const e = by === 'month' ? shiftDays(shiftDays(k + '-01', 32).slice(0, 8) + '01', -1) : by === 'week' ? shiftDays(k, 6) : k;
-  return e > todayISO() ? todayISO() : e;
+  return e > to ? to : e;
 };
 const bucketLabel = (by, k) => (by === 'month' ? monthName(k) : shortDay(k));
+const meanOf = (v) => v.reduce((t, y) => t + y, 0) / (v.length || 1);
 const catColor = (k) => PALETTE[[...(k || '')].reduce((s, c) => s + c.charCodeAt(0), 0) % 8];
+function gRange(g) {
+  if (g.period === 'Custom' && g.from) return { from: g.from, to: g.to && g.to < todayISO() ? g.to : todayISO() };
+  return { from: shiftDays(todayISO(), -(GPERIODS.find((p) => p[0] === g.period) || GPERIODS[2])[1] + 1), to: todayISO() };
+}
+const periodLabel = (g) => (g.period === 'Custom' && g.from ? `${shortDay(gRange(g).from)} – ${shortDay(gRange(g).to)}` : g.period);
 function bucketKeys(g) {
-  const days = (GPERIODS.find((p) => p[0] === g.period) || GPERIODS[2])[1], keys = [];
-  const by = g.by === 'day' && days > 183 ? 'week' : g.by || 'month';
-  for (let d = shiftDays(todayISO(), -days + 1); d <= todayISO(); d = shiftDays(d, 1)) { const k = bucketOf(by, d); if (keys[keys.length - 1] !== k) keys.push(k); }
-  return { keys, by };
+  const { from, to } = gRange(g), keys = [];
+  const by = g.by === 'day' && daysBetween(from, to) > 183 ? 'week' : g.by || 'month';
+  for (let d = from; d <= to; d = shiftDays(d, 1)) { const k = bucketOf(by, d); if (keys[keys.length - 1] !== k) keys.push(k); }
+  return { keys, by, from, to };
 }
 // Past balances: saved daily snapshots when we have them, otherwise worked backwards from today's balance through posted transactions.
 function balanceAt(ids) {
@@ -622,23 +630,23 @@ function balanceAt(ids) {
   };
 }
 function series(g) {
-  const { keys, by } = bucketKeys(g), idx = new Map(keys.map((k, i) => [k, i]));
+  const { keys, by, from, to } = bucketKeys(g), idx = new Map(keys.map((k, i) => [k, i]));
   const ids = g.accts && g.accts.length ? new Set(g.accts) : null;
   const sumBy = (list, sign) => {
     const v = keys.map(() => 0);
-    for (const t of list) { if (ids && !ids.has(t.account_id)) continue; const i = idx.get(bucketOf(by, t.date)); if (i != null) v[i] += sign * t.amount; }
+    for (const t of list) { if ((ids && !ids.has(t.account_id)) || t.date < from || t.date > to) continue; const i = idx.get(bucketOf(by, t.date)); if (i != null) v[i] += sign * t.amount; }
     return v;
   };
-  const base = { keys, by, kind: 'bars' };
+  const base = { keys, by, from, to, kind: 'bars' };
   if (g.type === 'spend') return { ...base, sets: [{ c: g.cat ? catColor(g.cat) : '#ff5a5f', v: sumBy(spending().filter((t) => (!g.cat || t.category === g.cat) && (!g.merchant || t.name === g.merchant)), 1) }] };
   if (g.type === 'income') return { ...base, sets: [{ c: '#1fd286', v: sumBy(income(), -1) }] };
   if (g.type === 'inout') return { ...base, sets: [{ c: '#1fd286', l: 'In', v: sumBy(income(), -1) }, { c: '#ff5a5f', l: 'Out', v: sumBy(spending(), 1) }] };
   if (g.type === 'networth') {
     const hist = (data.history || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
-    return { ...base, kind: 'line', sets: [{ v: keys.map((k) => { const e = bucketEnd(by, k); let last = null; for (const p of hist) if (p.date <= e) last = p.assets - p.debts; return last; }) }] };
+    return { ...base, kind: 'line', sets: [{ v: keys.map((k) => { const e = bucketEnd(by, k, to); let last = null; for (const p of hist) if (p.date <= e) last = p.assets - p.debts; return last; }) }] };
   }
   const at = balanceAt(ids ? [...ids] : allAccounts().filter((a) => !isDebt(a)).map((a) => a.account_id));
-  return { ...base, kind: 'line', sets: [{ v: keys.map((k) => at(bucketEnd(by, k))) }] };
+  return { ...base, kind: 'line', sets: [{ v: keys.map((k) => at(bucketEnd(by, k, to))) }] };
 }
 function gTitle(g) {
   if (g.title) return g.title;
@@ -660,7 +668,8 @@ function linesChart(s, onScrub) {
   const ticks = s.keys.map((k, i) => ((n - 1 - i) % Math.ceil(n / 6) === 0 ? `<text x="${Math.min(W - 12, Math.max(12, X(i))).toFixed(1)}" y="${H + 13}" font-size="10" text-anchor="middle" fill="var(--dim)">${bucketLabel(s.by, k)}</text>` : '')).join('');
   const svg = h('svg', { class: 'chart', viewBox: `0 0 ${W} ${H + 16}`, html:
     s.sets.map((x, j) => `<linearGradient id="${id}${j}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${x.c}" stop-opacity="${single ? 0.32 : 0.14}"/><stop offset="1" stop-color="${x.c}" stop-opacity="0"/></linearGradient>`).join('') +
-    s.sets.map((x, j) => { const d = curve(x.v); return `<path class="area" d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id}${j})"/><path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${x.c}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`; }).join('') + ticks });
+    s.sets.map((x, j) => { const d = curve(x.v); return `<path class="area" d="${d} L ${W} ${H} L 0 ${H} Z" fill="url(#${id}${j})"/><path class="stroke" pathLength="1" d="${d}" fill="none" stroke="${x.c}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>`; }).join('') +
+    s.sets.map((x) => avgLine(Y(meanOf(x.v)), W, x.c)).join('') + ticks });
   const pos = (i, x) => `left:${(X(i) / W) * 100}%;top:${(Y(x.v[i]) / (H + 16)) * 100}%;--c:${x.c}`;
   const last = n - 1, cursor = h('i', { class: 'cursor', hidden: true });
   const dots = s.sets.map((x) => h('i', { class: 'pulse', style: pos(last, x) }));
@@ -685,11 +694,11 @@ function graphCard(g, opts = {}) {
       big.textContent = cur == null ? '—' : money(cur, true);
       const ch = pts.length > 1 ? pts[pts.length - 1] - pts[0] : null;
       sub.className = 'gsub ' + (sc ? 'muted' : ch == null ? 'muted' : ch >= 0 ? 'pos' : 'neg');
-      sub.textContent = sc ? sc.label : ch == null ? 'Not enough history yet' : `${ch >= 0 ? '▲' : '▼'} ${money(Math.abs(ch))} over ${g.period}`;
+      sub.textContent = sc ? sc.label : ch == null ? 'Not enough history yet' : `${ch >= 0 ? '▲' : '▼'} ${money(Math.abs(ch))} over ${periodLabel(g)}`;
     } else if (s.sets.length > 1) {
       const [a, b] = s.sets.map((x) => (sc ? x.v[sc.i] : x.v.reduce((t, y) => t + y, 0))), net = a - b;
       big.textContent = (net >= 0 ? '+' : '−') + money(Math.abs(net)); big.className = 'big fit ' + (net >= 0 ? 'pos' : 'neg');
-      sub.className = 'gsub muted'; sub.textContent = `${sc ? sc.label : g.period}: ${money(a)} in · ${money(b)} out`;
+      sub.className = 'gsub muted'; sub.textContent = `${sc ? sc.label : periodLabel(g)}: ${money(a)} in · ${money(b)} out`;
     } else {
       const tot = first.reduce((t, y) => t + y, 0), avg = tot / first.length;
       big.textContent = money(sc ? first[sc.i] : avg, !!sc);
@@ -698,25 +707,28 @@ function graphCard(g, opts = {}) {
   };
   show(null);
   const chart = s.kind === 'line'
-    ? lineChart(s.keys.map((k, i) => ({ v: first[i], date: bucketEnd(s.by, k) })).filter((p) => p.v != null), (p) => show(p ? { v: p.v, label: dayName(p.date) } : null))
+    ? lineChart(s.keys.map((k, i) => ({ v: first[i], date: bucketEnd(s.by, k, s.to) })).filter((p) => p.v != null), (p) => show(p ? { v: p.v, label: dayName(p.date) } : null), true)
     : linesChart(s, show);
   return h('div', { class: 'card graph' + (opts.flat ? ' flat' : '') },
     h('div', { class: 'ghead' }, h('div', { class: 'gtitle' }, gTitle(g)),
       opts.edit ? h('button', { class: 'gbtn', 'aria-label': 'Edit graph', onclick: opts.edit }, '•••') : null,
       opts.save ? h('button', { class: 'gbtn', onclick: (e) => { graphs.push({ ...g, id: Date.now().toString(36) }); saveGraphs(); e.target.textContent = 'Added'; e.target.disabled = true; } }, '+ Graphs') : null),
     big, sub, chart || h('div', { class: 'empty small' }, 'Not enough history yet'),
-    s.sets.length > 1 ? h('div', { class: 'legend' }, s.sets.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), x.l))) : null);
+    s.sets.length > 1 ? h('div', { class: 'legend' }, s.sets.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), `${x.l} · avg ${money(meanOf(x.v))}`))) : null,
+    opts.edit ? h('div', { class: 'gper' }, [...GPERIODS.map(([p]) => p), 'Custom'].map((p) => h('button', { class: 'chip' + (g.period === p ? ' on' : ''),
+      onclick: () => { if (p === 'Custom') return opts.edit('Custom'); g.period = p; saveGraphs(); render(); } }, p === 'Custom' && g.period === 'Custom' ? periodLabel(g) : p))) : null);
 }
 function viewGraphs(el) {
   if (!data || !data.connections.length) return noData(el);
   { const lb = loadingBanner(); if (lb) el.append(lb); }
-  for (const g of graphs) el.append(graphCard(g, { edit: () => openGraphEditor(g) }));
+  for (const g of graphs) el.append(graphCard(g, { edit: (p) => openGraphEditor(g, p) }));
   el.append(h('button', { class: 'btn', onclick: () => openGraphEditor(null) }, '+ Add graph'));
 }
-function openGraphEditor(orig) {
+function openGraphEditor(orig, preset) {
   const f = orig ? { ...orig, accts: [...(orig.accts || [])] } : { type: 'spend', period: '1Y', by: 'month', accts: [] };
+  if (preset === 'Custom') { f.period = 'Custom'; if (!f.from) { f.from = shiftDays(todayISO(), -364); f.to = todayISO(); } }
   const chips = (opts, key, cond) => h('div', { class: 'presets wrap' }, opts.filter(cond || (() => true)).map(([v, l]) =>
-    h('button', { class: 'chip' + (f[key] === v ? ' on' : ''), onclick: () => { f[key] = v; renderPanel(); } }, l)));
+    h('button', { class: 'chip' + (f[key] === v ? ' on' : ''), onclick: () => { f[key] = v; if (v === 'Custom' && !f.from) { f.from = shiftDays(todayISO(), -364); f.to = todayISO(); } renderPanel(); } }, l)));
   const pick = (label, key, options) => h('div', { class: 'field' }, h('label', {}, label),
     h('select', { onchange: (e) => { f[key] = e.target.value || null; renderPanel(); } },
       h('option', { value: '' }, 'All'), options.map(([v, l]) => h('option', { value: v, selected: f[key] === v ? true : null }, l))));
@@ -735,8 +747,10 @@ function openGraphEditor(orig) {
           h('input', { type: 'checkbox', class: 'switch', checked: f.accts.includes(a.account_id) ? true : null,
             onchange: (e) => { f.accts = e.target.checked ? [...f.accts, a.account_id] : f.accts.filter((x) => x !== a.account_id); renderPanel(); } })))));
     }
-    el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Period'), chips(GPERIODS.map(([p]) => [p, p]), 'period'),
-      h('div', { class: 'label', style: 'margin-top:12px' }, 'Group by'), chips(GBY, 'by', ([v]) => v !== 'day' || ['3M', '6M'].includes(f.period))));
+    el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Period'), chips([...GPERIODS.map(([p]) => [p, p]), ['Custom', 'Custom']], 'period'),
+      f.period === 'Custom' ? h('div', { class: 'gdates' }, ['from', 'to'].map((key) => h('div', { class: 'field' }, h('label', {}, key === 'from' ? 'From' : 'To'),
+        h('input', { type: 'date', value: f[key], max: todayISO(), onchange: (e) => { if (e.target.value) { f[key] = e.target.value; if (f.from > f.to) [f.from, f.to] = [f.to, f.from]; renderPanel(); } } })))) : null,
+      h('div', { class: 'label', style: 'margin-top:12px' }, 'Group by'), chips(GBY, 'by', ([v]) => v !== 'day' || daysBetween(gRange(f).from, gRange(f).to) <= 183)));
     const i = orig ? graphs.indexOf(orig) : -1;
     const done = () => { if (f.type !== 'spend') { delete f.cat; delete f.merchant; } if (i >= 0) graphs[i] = f; else graphs.push({ ...f, id: Date.now().toString(36) }); saveGraphs(); closePanel(); render(); };
     const move = (d) => { const j = i + d; if (j < 0 || j >= graphs.length) return; graphs.splice(i, 1); graphs.splice(j, 0, f); saveGraphs(); closePanel(); render(); };
@@ -748,7 +762,11 @@ function openGraphEditor(orig) {
 }
 
 // ---------- transaction sheet ----------
-let sheet = null, sheetLimit = 150;
+let sheet = null, sheetLimit = 150, txSort = store.get('sort', 'time');
+const SORTS = [['time', 'Newest'], ['high', 'Price ↓'], ['low', 'Price ↑']];
+const sortTx = (l) => l.slice().sort(txSort === 'high' ? (a, b) => Math.abs(b.amount) - Math.abs(a.amount) : txSort === 'low' ? (a, b) => Math.abs(a.amount) - Math.abs(b.amount) : (a, b) => (a.date < b.date ? 1 : -1));
+const sortBar = (redraw) => h('div', { class: 'sortbar' }, h('span', {}, 'Sort'), SORTS.map(([v, l]) =>
+  h('button', { class: 'chip' + (txSort === v ? ' on' : ''), onclick: (e) => { e.stopPropagation(); txSort = v; store.set('sort', v); redraw(); } }, l)));
 function openSheet(sh) { sheet = sh; sheetLimit = 150; openPanel('txns'); }
 function viewSheet(el) {
   if (!sheet) return;
@@ -758,6 +776,12 @@ function viewSheet(el) {
   if (sheet.graph) el.append(graphCard(sheet.graph, { save: true }));
   const list = sheet.list().slice().sort((a, b) => (a.pending !== b.pending ? (a.pending ? -1 : 1) : a.date < b.date ? 1 : -1));
   if (!list.length) return el.append(h('div', { class: 'empty small' }, 'No transactions yet'));
+  el.append(sortBar(renderPanel));
+  if (txSort !== 'time') {
+    el.append(h('div', { class: 'card list' }, sortTx(list).slice(0, sheetLimit).map(txnRow)));
+    if (list.length > sheetLimit) el.append(h('button', { class: 'btn', onclick: () => { sheetLimit += 300; renderPanel(); } }, `Show more (${list.length - sheetLimit})`));
+    return;
+  }
   const months = {};
   for (const t of list) if (!t.pending && t.amount > 0) months[monthKey(t.date)] = (months[monthKey(t.date)] || 0) + t.amount;
   let card = null, cur = null;

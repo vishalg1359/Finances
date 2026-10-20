@@ -295,3 +295,12 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .field select { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: var(--card2); font-size: 16px; -webkit-appearance: none; appearance: none; }
 .gmoves { display: flex; gap: 8px; }
 .gmoves .btn[disabled] { opacity: .4; }
+.gper { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.gper .chip { padding: 5px 11px; font-size: 12px; }
+.gdates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+.gdates .field { margin: 6px 0 0; min-width: 0; }
+.gdates input { padding: 10px; font-size: 15px; }
+.sortbar { display: flex; align-items: center; gap: 6px; margin: 2px 0 10px; }
+.sortbar > span { font-size: 12px; color: var(--muted); font-weight: 700; margin-right: 2px; }
+.sortbar .chip { padding: 5px 11px; font-size: 12px; }
+.drill .sortbar { margin: 8px 0 6px; }
