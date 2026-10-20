@@ -127,3 +127,12 @@ svg.chart { width: 100%; height: auto; display: block; overflow: visible; }
   background: rgba(0,0,0,.72); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); animation: fadein .2s ease; }
 .overlay p { color: var(--fg); font-weight: 600; margin: 0; }
 .spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--line); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+.rangecard { padding: 12px 14px; }
+.presets { display: flex; gap: 6px; overflow-x: auto; margin: 0 -14px 10px; padding: 0 14px; scrollbar-width: none; }
+.presets::-webkit-scrollbar { display: none; }
+.presets .chip { padding: 6px 12px; font-size: 13px; }
+.range { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dfield { min-width: 0; display: flex; flex-direction: column; gap: 4px; background: var(--card2); border: 1px solid var(--line); border-radius: 12px; padding: 7px 12px; }
+.dfield span { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.dfield input { -webkit-appearance: none; appearance: none; border: 0; background: none; padding: 0; margin: 0; width: 100%; min-width: 0; min-height: 22px; font-size: 15px; font-weight: 600; color: var(--fg); color-scheme: dark; text-align: left; }
+.dfield input::-webkit-date-and-time-value { text-align: left; }

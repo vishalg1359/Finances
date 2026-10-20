@@ -14,6 +14,7 @@ let view = 'overview';
 let conn = store.get('conn', 'all');
 let month = null;
 let open = new Set();
+let range = null;
 let lastSync = 0, syncing = null, pollTimer = null, pollCount = 0;
 
 const $ = (id) => document.getElementById(id);
@@ -33,7 +34,9 @@ const money = (n, cents) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleStrin
 const monthKey = (d) => d.slice(0, 7);
 const monthName = (k, long) => new Date(k + '-15T12:00').toLocaleDateString('en-US', long ? { month: 'long', year: 'numeric' } : { month: 'short' });
 const dayName = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const isoOf = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+const todayISO = () => isoOf(new Date());
+const shiftDays = (iso, n) => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() + n); return isoOf(d); };
 const nice = (cat) => (cat || 'OTHER').toLowerCase().replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 function toast(msg) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), 2600); }
 
@@ -230,10 +233,6 @@ function noData(el) {
   el.append(h('div', { class: 'empty' }, h('p', {}, 'No accounts connected yet.'),
     h('button', { class: 'btn primary', onclick: () => connect() }, '+ Connect an account')));
 }
-function monthPicker(months, values, rerender) {
-  month = month && months.includes(month) ? month : months[months.length - 1];
-  return barChart(months, values, (m) => { month = m; open.clear(); rerender(); }, month);
-}
 
 // ---------- Overview ----------
 function viewOverview(el) {
@@ -253,8 +252,8 @@ function viewOverview(el) {
       h('span', { class: 'muted' }, 'since ' + dayName(data.history[0].date))),
     lineChart(hist, true)));
   el.append(h('div', { class: 'tiles' },
-    h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }), 'You have'), h('div', { class: 'tile-num fit' }, money(haveTotal))),
-    h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'), h('div', { class: 'tile-num fit' }, money(oweTotal)))));
+    h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }), 'You have'), h('div', { class: 'tile-num fit' }, money(sum(have.filter((a) => a.subtype === 'checking')))), h('div', { class: 'sub' }, 'in checking')),
+    h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'), h('div', { class: 'tile-num fit' }, money(oweTotal)), h('div', { class: 'sub' }, loans.length || owe.some((a) => a.type === 'loan') ? 'cards + loans' : 'on cards'))));
   const byKind = (list, kinds) => kinds.map(([label, test]) => [label, list.filter(test)]).filter(([, l]) => l.length);
   const haveGroups = byKind(have, [['Checking', (a) => a.subtype === 'checking'], ['Savings', (a) => a.subtype === 'savings'],
     ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage'],
@@ -275,20 +274,45 @@ function viewOverview(el) {
   if (data && data.synced) el.append(h('p', { class: 'foot' }, 'Updated ' + new Date(data.synced).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })));
 }
 
+// ---------- date range (spending tabs) ----------
+const thisMonthRange = () => ({ from: todayISO().slice(0, 8) + '01', to: todayISO() });
+function rangePresets() {
+  const t = todayISO(), d = new Date(t + 'T12:00');
+  const lastStart = isoOf(new Date(d.getFullYear(), d.getMonth() - 1, 1)), lastEnd = isoOf(new Date(d.getFullYear(), d.getMonth(), 0));
+  const first = allTxns().reduce((m, x) => (x.date < m ? x.date : m), t);
+  return [['This month', thisMonthRange()], ['Last month', { from: lastStart, to: lastEnd }],
+    ['30 days', { from: shiftDays(t, -29), to: t }], ['3 months', { from: shiftDays(t, -89), to: t }],
+    ['This year', { from: t.slice(0, 4) + '-01-01', to: t }], ['All', { from: first, to: t }]];
+}
+const fmtShort = (iso) => new Date(iso + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: iso.slice(0, 4) === todayISO().slice(0, 4) ? undefined : 'numeric' });
+const rangeLabel = (r) => { const p = rangePresets().find(([, x]) => x.from === r.from && x.to === r.to); return p ? p[0] : fmtShort(r.from) + ' – ' + fmtShort(r.to); };
+function rangeBar(rerender) {
+  const set = (r) => { if (r.from > r.to) r = { from: r.to, to: r.from }; range = r; open.clear(); rerender(); };
+  const date = (key) => h('label', { class: 'dfield' }, h('span', {}, key === 'from' ? 'From' : 'To'),
+    h('input', { type: 'date', value: range[key], max: todayISO(), onchange: (e) => e.target.value && set({ ...range, [key]: e.target.value }) }));
+  return h('div', { class: 'card rangecard' },
+    h('div', { class: 'presets' }, rangePresets().map(([label, r]) =>
+      h('button', { class: 'chip' + (r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => set(r) }, label))),
+    h('div', { class: 'range' }, date('from'), date('to')));
+}
+
 // ---------- Breakdowns (categories / merchants / paid with) ----------
 function breakdown(el, keyOf, labelOf, icon, rerender) {
   if (!data || !data.connections.length) return noData(el);
   { const lb = loadingBanner(); if (lb) el.append(lb); }
   const list = spending();
   if (!list.length) { el.append(h('div', { class: 'empty' }, 'No spending yet.')); return; }
-  const months = lastMonths(12), per = byMonth(list);
-  const picker = monthPicker(months, months.map((x) => per[x] || 0), rerender);
-  const inMonth = list.filter((t) => monthKey(t.date) === month);
+  range = range || thisMonthRange();
+  const inRange = (t, r) => t.date >= r.from && t.date <= r.to;
+  const inMonth = list.filter((t) => inRange(t, range));
   const total = inMonth.reduce((s, t) => s + t.amount, 0);
-  const prev = months[months.indexOf(month) - 1], prevTotal = prev ? per[prev] || 0 : 0;
+  const days = daysBetween(range.from, range.to) + 1;
+  const prevR = { from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) };
+  const prevTotal = list.filter((t) => inRange(t, prevR)).reduce((s, t) => s + t.amount, 0);
   const diff = prevTotal ? ((total - prevTotal) / prevTotal) * 100 : null;
-  el.append(h('div', { class: 'card' }, h('h2', {}, 'Spent in ' + monthName(month, true)), h('div', { class: 'big fit' }, money(total, true)),
-    diff == null ? null : h('div', { class: 'sub ' + (diff > 0 ? 'neg' : 'pos') }, `${diff > 0 ? '▲' : '▼'} ${Math.abs(diff).toFixed(0)}% vs ${monthName(prev)}`), picker));
+  el.append(rangeBar(rerender));
+  el.append(h('div', { class: 'card' }, h('h2', {}, 'Spent · ' + rangeLabel(range)), h('div', { class: 'big fit' }, money(total, true)),
+    diff == null ? null : h('div', { class: 'sub ' + (diff > 0 ? 'neg' : 'pos') }, `${diff > 0 ? '▲' : '▼'} ${Math.abs(diff).toFixed(0)}% vs the ${days} days before`)));
   const groups = {};
   for (const t of inMonth) (groups[keyOf(t)] = groups[keyOf(t)] || []).push(t);
   const sorted = Object.entries(groups).map(([k, l]) => [k, l, l.reduce((s, t) => s + t.amount, 0)]).sort((a, b) => b[2] - a[2]);
