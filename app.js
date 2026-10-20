@@ -2,9 +2,15 @@
 // Finances: talks only to the password-protected Worker; Plaid keys never reach the phone.
 
 const DEFAULT_SERVER = 'https://finances.vishalg.workers.dev';
+// Settings saved to the server so they follow the account, with a local copy for fast startup.
+let settingsReady = false;
+const SYNCED = ['loans', 'main', 'histDays', 'layout', 'graphs', 'cats', 'sort'];
 const store = {
   get: (k, d) => { try { const v = localStorage.getItem('fin.' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
-  set: (k, v) => { try { localStorage.setItem('fin.' + k, JSON.stringify(v)); } catch (_) {} },
+  set: (k, v) => {
+    try { localStorage.setItem('fin.' + k, JSON.stringify(v)); } catch (_) {}
+    if (SYNCED.includes(k) && settingsReady) { localStorage.setItem('fin.settingsAt', Date.now()); localStorage.setItem('fin.settingsDirty', '1'); pushSettings(); }
+  },
   del: (k) => localStorage.removeItem('fin.' + k),
 };
 
@@ -52,6 +58,31 @@ async function api(path, body) {
   if (res.status === 401) { logout(); throw new Error('Wrong password'); }
   if (!res.ok) throw new Error(json.message || json.error || 'Server error');
   return json;
+}
+let pushTimer = null;
+function pushSettings() {
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    const values = Object.fromEntries(SYNCED.map((k) => [k, store.get(k, null)]));
+    api('/settings/save', { values, updated: Number(localStorage.getItem('fin.settingsAt')) || Date.now() })
+      .then(() => localStorage.removeItem('fin.settingsDirty')).catch(() => {});
+  }, 800);
+}
+async function pullSettings() {
+  let s;
+  try { s = await api('/settings', {}); } catch (_) { settingsReady = true; return; }
+  settingsReady = true;
+  const localAt = Number(localStorage.getItem('fin.settingsAt')) || 0;
+  if (localStorage.getItem('fin.settingsDirty') || !s || !s.values) { if (localAt || !s) pushSettings(); return; }
+  if (s.updated <= localAt) return;
+  for (const k of SYNCED) {
+    if (s.values[k] == null) localStorage.removeItem('fin.' + k); else localStorage.setItem('fin.' + k, JSON.stringify(s.values[k]));
+  }
+  localStorage.setItem('fin.settingsAt', s.updated);
+  loans = store.get('loans', []); mainIds = store.get('main', null); histDays = store.get('histDays', 30);
+  layout = store.get('layout', { order: [], size: {}, groups: {} }); cats = store.get('cats', { tx: {}, rules: {} }); txSort = store.get('sort', 'time');
+  graphs = store.get('graphs', null) || DEFAULT_GRAPHS.map((g, i) => ({ id: 'd' + i, period: '1Y', by: 'month', ...g }));
+  render(); if (panel) renderPanel();
 }
 function gotData(d) {
   data = d; store.set('data', d);
@@ -1049,7 +1080,7 @@ function showApp() { $('login').hidden = true; $('main').hidden = false; $('tabb
 $('login-btn').addEventListener('click', async () => {
   store.set('server', $('login-url').value.trim()); store.set('pass', $('login-pass').value);
   $('login-err').textContent = '';
-  try { await api('/login', {}); $('login-pass').value = ''; showApp(); refresh(false); }
+  try { await api('/login', {}); $('login-pass').value = ''; showApp(); refresh(false); pullSettings(); }
   catch (e) { store.del('pass'); $('login-err').textContent = e.message === 'Wrong password' ? 'Wrong password.' : 'Couldn’t reach the server.'; showLogin(); }
 });
 $('login-pass').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('login-btn').click(); });
@@ -1059,7 +1090,7 @@ $('gear-btn').addEventListener('click', () => openPanel('settings'));
 // Every open (or return to the app) pulls fresh data.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible' || !store.get('pass', '')) return;
-  if (Date.now() - lastSync > 30000) refresh(false);
+  if (Date.now() - lastSync > 30000) { refresh(false); pullSettings(); }
   if (navigator.serviceWorker && navigator.serviceWorker.getRegistration) navigator.serviceWorker.getRegistration().then((r) => r && r.update());
 });
 
@@ -1068,7 +1099,7 @@ if (store.get('pass', '')) {
   // Back from a bank's OAuth page: finish the same Link session.
   const pending = store.get('linkToken', null);
   if (pending && location.search.includes('oauth_state_id')) openLink(pending, location.href);
-  refresh(false);
+  refresh(false); pullSettings();
 } else showLogin();
 if ('serviceWorker' in navigator) {
   // A new version takes over as soon as it's downloaded, so opening the app always shows the latest.

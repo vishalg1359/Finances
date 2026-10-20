@@ -5,6 +5,7 @@ const PLAID_HOSTS = { sandbox: 'https://sandbox.plaid.com', production: 'https:/
 const ITEMS_KEY = 'items';
 const HISTORY_KEY = 'history';
 const SNAPSHOT_KEY = 'snapshot';
+const SETTINGS_KEY = 'settings';
 
 export default {
   async fetch(request, env) {
@@ -22,6 +23,11 @@ export default {
       if (path === '/sync') return reply(await syncAll(env));
       if (path === '/data') return reply(await loadData(env));
       if (path === '/remove') return reply(await removeItem(env, body));
+      if (path === '/settings') return reply(await getJSON(env, SETTINGS_KEY, null));
+      if (path === '/settings/save') {
+        await putJSON(env, SETTINGS_KEY, { values: body.values || {}, updated: Number(body.updated) || Date.now() });
+        return reply({ ok: true });
+      }
       return reply({ error: 'not_found' }, 404);
     } catch (e) {
       return reply({ error: e.code || 'server_error', message: e.message }, e.status || 500);
