@@ -165,6 +165,14 @@ async function syncItem(env, item) {
   const result = { item_id: item.item_id, institution: item.institution, error: null };
   try {
     result.tx_status = await syncTransactions(env, item);
+    if (!item.brand) {
+      try {
+        const it = await plaid(env, '/item/get', { access_token: item.access_token });
+        const inst = await plaid(env, '/institutions/get_by_id', { institution_id: it.item.institution_id, country_codes: ['US'], options: { include_optional_metadata: true } });
+        item.brand = { logo: inst.institution.logo || null, color: inst.institution.primary_color || null };
+      } catch (_) { item.brand = { logo: null, color: null }; }
+    }
+    result.brand = item.brand;
     const acc = await plaid(env, '/accounts/get', { access_token: item.access_token });
     result.accounts = acc.accounts;
     try {

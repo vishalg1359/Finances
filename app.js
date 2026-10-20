@@ -116,7 +116,7 @@ async function connect(item_id) {
 
 // ---------- derived data ----------
 const shownConns = () => (data ? data.connections.filter((c) => conn === 'all' || c.item_id === conn) : []);
-const allAccounts = () => shownConns().flatMap((c) => (c.accounts || []).map((a) => ({ ...a, institution: c.institution })));
+const allAccounts = () => shownConns().flatMap((c) => (c.accounts || []).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
 const NOT_SPENDING = new Set(['INCOME', 'TRANSFER_IN', 'TRANSFER_OUT', 'LOAN_PAYMENTS']);
 const allTxns = () => (data ? data.transactions : []);
 const txns = () => { if (conn === 'all') return allTxns(); const ids = new Set(allAccounts().map((a) => a.account_id)); return allTxns().filter((t) => ids.has(t.account_id)); };
@@ -254,27 +254,52 @@ function donut(segments, center, onPick) {
   svg.addEventListener('click', (e) => { const c = e.target.closest('.seg'); if (c) onPick(+c.dataset.k); });
   return h('div', { class: 'donutwrap' }, svg, h('div', { class: 'donut-center' }, center));
 }
+const mark = (brand, name) => h('div', { class: 'bank', style: brand && brand.color ? `background:${brand.color}` : null },
+  brand && brand.logo ? h('img', { src: 'data:image/png;base64,' + brand.logo, alt: '' }) : (name || '?')[0].toUpperCase());
+function paint(node, v, cents) {
+  const str = money(v, cents), i = str.lastIndexOf('.');
+  if (cents && i > 0 && node.classList.contains('hero-num')) node.replaceChildren(str.slice(0, i), h('span', { class: 'cents' }, str.slice(i)));
+  else node.textContent = str;
+}
+function paceChart() {
+  const t = todayISO(), d = new Date(t + 'T12:00'), y = d.getFullYear(), mo = d.getMonth(), today = d.getDate();
+  const curDays = new Date(y, mo + 1, 0).getDate(), prevDays = new Date(y, mo, 0).getDate();
+  const cur = monthKey(t), prev = lastMonths(2)[0];
+  const running = (m, n) => { const a = Array(n).fill(0); for (const x of spending()) if (monthKey(x.date) === m) a[+x.date.slice(8) - 1] += x.amount; let s = 0; return a.map((v) => (s += v)); };
+  const c = running(cur, curDays).slice(0, today), p = running(prev, prevDays);
+  if (!p[p.length - 1]) return null;
+  const W = 320, H = 86, n = Math.max(curDays, prevDays), max = Math.max(1, ...c, ...p);
+  const xy = (v, i) => [((i / (n - 1)) * W).toFixed(1), (H - 4 - (Math.max(0, v) / max) * (H - 10)).toFixed(1)];
+  const pts = (arr) => arr.map((v, i) => xy(v, i).join(',')).join(' ');
+  const [ex, ey] = xy(c[c.length - 1], c.length - 1);
+  const svg = h('svg', { class: 'chart pace', viewBox: `0 0 ${W} ${H}`, html:
+    `<polyline points="${pts(p)}" fill="none" stroke="var(--dim)" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round"/>` +
+    `<polyline class="stroke" pathLength="1" points="${pts(c)}" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>` +
+    `<circle cx="${ex}" cy="${ey}" r="4" fill="var(--accent)"/>` });
+  return { svg, diff: c[c.length - 1] - p[Math.min(today, prevDays) - 1] };
+}
 const logo = (t) => h('div', { class: 'logo' }, t.logo ? h('img', { src: t.logo, alt: '' }) : (t.name || '?')[0].toUpperCase());
 
 // ---------- motion ----------
 const shownVals = {};
 function countUp(node, key, to, cents) {
   const from = key in shownVals ? shownVals[key] : 0; shownVals[key] = to;
-  if (from === to || matchMedia('(prefers-reduced-motion: reduce)').matches) { node.textContent = money(to, cents); return node; }
+  if (from === to || matchMedia('(prefers-reduced-motion: reduce)').matches) { paint(node, to, cents); return node; }
   const t0 = performance.now(), dur = 750;
   const step = (t) => {
     if (!node.isConnected && t - t0 > 50) return;
     const p = Math.min(1, (t - t0) / dur), e = 1 - Math.pow(1 - p, 3);
-    node.textContent = money(from + (to - from) * e, cents);
+    paint(node, from + (to - from) * e, cents);
     if (p < 1) requestAnimationFrame(step); else fitText();
   };
-  node.textContent = money(from, cents); requestAnimationFrame(step);
+  paint(node, from, cents); requestAnimationFrame(step);
   return node;
 }
 const num = (cls, key, v, cents) => countUp(h('div', { class: cls + ' fit' }), key, v, cents);
 function setGlow(dir) { document.body.style.setProperty('--glow', dir > 0 ? 'rgba(31,210,134,.16)' : dir < 0 ? 'rgba(255,90,95,.14)' : 'rgba(120,130,150,.08)'); }
 
 // ---------- shared pieces ----------
+const greeting = () => { const hr = new Date().getHours(); return hr < 5 ? 'Good evening' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening'; };
 const TITLES = { overview: 'Overview', categories: 'Categories', merchants: 'Merchants', paidwith: 'Paid with', cashflow: 'Cash flow' };
 let mainIds = store.get('main', null);
 const isMain = (a) => (mainIds ? mainIds.includes(a.account_id) : a.subtype === 'checking');
@@ -283,7 +308,7 @@ const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const shortDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const txnRow = (t) => h('div', { class: 'row' }, logo(t), h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name),
   h('div', { class: 'sub' }, shortDay(t.date) + (t.pending ? ' · pending' : '') + (t.amount < 0 ? ' · refund' : ''))),
-  h('div', { class: 'amt' + (t.amount < 0 ? ' pos' : '') }, (t.amount < 0 ? '+' : '') + money(Math.abs(t.amount), true)));
+  h('div', { class: 'amt ' + (t.amount < 0 ? 'pos' : 'neg') }, (t.amount < 0 ? '+' : '−') + money(Math.abs(t.amount), true)));
 const toggle = (k) => { open.has(k) ? open.delete(k) : open.add(k); render(); };
 function loadingBanner() {
   const l = loadingConns().filter((c) => conn === 'all' || c.item_id === conn);
@@ -319,8 +344,8 @@ function viewOverview(el) {
   };
   showChange();
   const chart = lineChart(hist, (p) => {
-    if (p) { heroNum.textContent = money(p.v, true); change.className = 'change muted'; change.textContent = dayName(p.date); }
-    else { heroNum.textContent = money(net, true); showChange(); }
+    if (p) { paint(heroNum, p.v, true); change.className = 'change muted'; change.textContent = dayName(p.date); }
+    else { paint(heroNum, net, true); showChange(); }
   });
   el.append(h('section', { class: 'hero-block' }, heroNum, change, chart,
     full.length > 2 ? h('div', { class: 'periods' }, PERIODS.map(([label, n]) => h('button', { class: 'period' + (n === histDays ? ' on' : ''),
@@ -336,10 +361,13 @@ function viewOverview(el) {
       num('tile-num', 'owe' + conn, sum(owe.filter((a) => a.type === 'credit'))), owePend ? h('div', { class: 'tile-pend' }, '+' + money(owePend, true) + ' pending') : null)));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
+  const pace = paceChart();
   el.append(h('div', { class: 'card tap spendcard', onclick: () => showView('categories') },
     h('div', { class: 'label' }, 'Spent this month'), num('big', 'spent' + conn, spent, true),
-    lastSpent ? h('div', { class: 'meter' }, h('i', { style: `width:${Math.min(100, (spent / lastSpent) * 100)}%` })) : null,
-    lastSpent ? h('div', { class: 'sub' }, `${money(lastSpent)} last month`) : null));
+    pace ? h('div', { class: 'linewrap' }, pace.svg) : null,
+    pace ? h('div', { class: 'pace-foot' },
+      h('span', { class: pace.diff > 0 ? 'neg' : 'pos' }, `${money(Math.abs(pace.diff))} ${pace.diff > 0 ? 'more' : 'less'} than this time last month`),
+      h('span', { class: 'pace-key' }, h('i', { class: 'k1' }), 'Now', h('i', { class: 'k2' }), 'Last')) : null));
   const split = (posted, p) => h('div', { class: 'split' },
     h('div', { class: 'splitbar' }, h('i', { class: 'posted', style: `flex:${Math.max(posted, 0.01)}` }), h('i', { class: 'pending', style: `flex:${Math.max(p, 0.01)}` })),
     h('div', { class: 'splitlegend' },
@@ -353,7 +381,7 @@ function viewOverview(el) {
       ? h('div', { class: 'amts' }, h('div', { class: 'amt neg' }, money(posted, true)), h('div', { class: 'pend-amt' }, '+' + money(pAmt, true) + ' pending'))
       : h('div', { class: 'amt' + (debt ? ' neg' : '') }, money(posted, true));
     return [h('div', { class: 'row ' + (label ? 'grp' : 'acct') + (pend.length ? ' tap' : '') + (isOpen ? ' open' : ''), onclick: pend.length ? () => toggle(k) : null },
-      h('div', { class: 'grow' }, h('div', { class: 'name' }, label || a.name, a.mask ? h('span', { class: 'mask' }, ' ' + a.mask) : null)),
+      mark(a.brand, a.institution), h('div', { class: 'grow' }, h('div', { class: 'name' }, label || a.name, a.mask ? h('span', { class: 'mask' }, ' ' + a.mask) : null)),
       amt, pend.length ? h('span', { class: 'chev' }, '›') : null),
       isOpen ? h('div', { class: 'drill' }, split(posted, pAmt), pend.map(txnRow)) : null];
   };
@@ -366,6 +394,13 @@ function viewOverview(el) {
     ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage'], ['Credit cards', (a) => a.type === 'credit'], ['Loans', (a) => a.type === 'loan'],
     ['Other', (a) => !isVault(a) && !['checking', 'savings'].includes(a.subtype) && !['investment', 'brokerage', 'credit', 'loan'].includes(a.type)]];
   const card = h('div', { class: 'card accounts' });
+  const alloc = [['Checking', (a) => a.subtype === 'checking', 'var(--good)'], ['Savings', (a) => a.subtype === 'savings' || isVault(a), '#4f8cff'],
+    ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage', '#a37bff']]
+    .map(([l, f, c]) => ({ l, c, v: sum(have.filter(f)) })).filter((x) => x.v > 0);
+  const allocTotal = alloc.reduce((s, x) => s + x.v, 0);
+  if (alloc.length > 1) card.append(h('div', { class: 'alloc' },
+    h('div', { class: 'allocbar' }, alloc.map((x) => h('i', { style: `flex:${x.v};background:${x.c}` }))),
+    h('div', { class: 'allockey' }, alloc.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), x.l, h('b', {}, Math.round((x.v / allocTotal) * 100) + '%'))))));
   for (const [label, test] of groups) {
     const list = accs.filter(test);
     const extra = label === 'Loans' ? manual : [];
@@ -376,7 +411,7 @@ function viewOverview(el) {
       h('div', { class: 'amt' + (debt ? ' neg' : '') }, money(sum(list) + extra.reduce((s, x) => s + x.bal, 0), true))));
     list.sort((a, b) => (b.balances.current || 0) - (a.balances.current || 0)).forEach((a) => card.append(...acctRow(a).filter(Boolean)));
     for (const { l, bal } of extra) card.append(h('div', { class: 'row acct tap', onclick: () => openPanel('loans') },
-      h('div', { class: 'grow' }, h('div', { class: 'name' }, l.name, h('span', { class: 'mask' }, ' est.'))), h('div', { class: 'amt' }, money(bal, true))));
+      mark(null, l.name), h('div', { class: 'grow' }, h('div', { class: 'name' }, l.name, h('span', { class: 'mask' }, ' est.'))), h('div', { class: 'amt' }, money(bal, true))));
   }
   if (card.childNodes.length) el.append(card);
 }
@@ -580,10 +615,11 @@ function renderChips() {
   const box = $('conns'), conns = data ? data.connections : [];
   box.hidden = conns.length < 2;
   const opts = [['all', 'All']].concat(conns.map((c) => [c.item_id, c.institution || 'Bank']));
-  const key = opts.map((o) => o.join(':')).join('|') + '#' + conn;
+  const key = opts.map((o) => o.join(':')).join('|') + '#' + conn + conns.map((c) => !!(c.brand && c.brand.logo)).join('');
   if (box.dataset.key === key) return;
   box.dataset.key = key;
-  box.replaceChildren(...opts.map(([id, label]) => h('button', { class: 'chip' + (id === conn ? ' on' : ''), onclick: () => pickConn(id) }, label)));
+  box.replaceChildren(...opts.map(([id, label]) => { const c = conns.find((x) => x.item_id === id);
+    return h('button', { class: 'chip' + (id === conn ? ' on' : '') + (c ? ' withmark' : ''), onclick: () => pickConn(id) }, c ? mark(c.brand, label) : null, label); }));
   const on = box.querySelector('.on');
   if (on) box.scrollTo({ left: on.offsetLeft - box.clientWidth / 2 + on.offsetWidth / 2, behavior: 'smooth' });
 }
@@ -595,7 +631,7 @@ function pickConn(id, dir) {
 }
 function render(anim) {
   renderChips();
-  $('title').textContent = TITLES[view];
+  $('title').textContent = view === 'overview' ? greeting() : TITLES[view];
   const el = $('view'); el.replaceChildren();
   VIEWS[view](el);
   fitText();

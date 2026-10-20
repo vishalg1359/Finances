@@ -1,5 +1,5 @@
 :root {
-  --bg: #000; --card: #101113; --card2: #17181b; --line: #222328; --fg: #f5f6f7; --muted: #8b8f98; --dim: #5b5f68;
+  --bg: #0a0a0b; --card: #141416; --card2: #1b1b1e; --line: #242428; --fg: #f5f6f7; --muted: #8b8f98; --dim: #5b5f68;
   --good: #1fd286; --bad: #ff5a5f; --accent: #1fd286; --bar: #2a2c31; --radius: 20px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
   --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif;
@@ -185,7 +185,6 @@ body::before { content: ''; position: fixed; z-index: -1; inset: -20vh -30vw aut
 .cardgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
 .ccard { position: relative; aspect-ratio: 1.6; border-radius: 16px; padding: 12px 14px; min-width: 0; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; cursor: pointer;
   background: linear-gradient(135deg, color-mix(in srgb, var(--c1) 55%, #111), color-mix(in srgb, var(--c2) 35%, #0b0b0d)); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
-.ccard::after { content: ''; position: absolute; right: -30%; top: -40%; width: 80%; height: 120%; background: radial-gradient(circle, rgba(255,255,255,.18), transparent 60%); }
 .ccard.on { box-shadow: inset 0 0 0 2px #fff; }
 .ccard-name { font-size: 13px; font-weight: 600; color: rgba(255,255,255,.85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ccard-amt { font: 700 22px/1 var(--display); letter-spacing: -.02em; white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums; }
@@ -214,3 +213,24 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .splitlegend small { color: var(--muted); font-size: 11px; font-weight: 600; }
 .sw { flex: none; width: 10px; height: 10px; border-radius: 3px; margin-top: 4px; }
 .drill .row .sub { color: var(--pend); }
+
+.bank { flex: none; width: 34px; height: 34px; border-radius: 50%; background: #2a2b30; display: grid; place-items: center; overflow: hidden; font-weight: 800; font-size: 14px; color: #fff; }
+.bank img { width: 100%; height: 100%; object-fit: cover; background: #fff; }
+.row.acct .bank, .row.grp .bank { width: 30px; height: 30px; }
+.row.acct { padding-left: 0; }
+.chip.withmark { display: inline-flex; align-items: center; gap: 7px; padding-left: 5px; }
+.chip .bank { width: 22px; height: 22px; font-size: 11px; }
+.hero-num .cents { font-size: .5em; color: var(--muted); letter-spacing: 0; vertical-align: .62em; margin-left: 2px; }
+.alloc { padding: 4px 0 14px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.allocbar { display: flex; gap: 3px; height: 8px; border-radius: 4px; overflow: hidden; transform-origin: left; animation: grow .8s cubic-bezier(.2,.8,.2,1) both; }
+.allocbar i { min-width: 3px; }
+.allockey { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.allockey span { display: inline-flex; align-items: center; gap: 6px; }
+.allockey i { width: 8px; height: 8px; border-radius: 2px; }
+.allockey b { color: var(--fg); }
+.alloc + .row { border-top: 0; }
+.spendcard .linewrap { margin: 12px 0 6px; }
+.pace-foot { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; font-weight: 600; flex-wrap: wrap; }
+.pace-key { color: var(--muted); display: inline-flex; align-items: center; gap: 5px; }
+.pace-key i { display: inline-block; width: 12px; height: 0; border-top: 2.5px solid var(--accent); margin-left: 6px; }
+.pace-key i.k2 { border-top: 2px dotted var(--dim); }
