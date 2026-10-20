@@ -581,8 +581,14 @@ function viewPaidWith(el) {
 }
 
 // ---------- graphs ----------
-const GTYPES = [['spend', 'Spending'], ['income', 'Money in'], ['inout', 'In vs out'], ['balance', 'Balance'], ['networth', 'Net worth']];
-const GPERIODS = [['3M', 92], ['6M', 183], ['1Y', 365], ['2Y', 730]];
+const GTYPES = [['spend', 'Spending'], ['income', 'Money in'], ['inout', 'Income vs spending'], ['balance', 'Balance'], ['networth', 'Net worth']];
+const ago = (n) => ({ from: shiftDays(todayISO(), -n + 1), to: todayISO() });
+const GPERIODS = [
+  ['month', 'This month', thisMonthRangeG], ['lastmonth', 'Last month', () => { const f = shiftDays(todayISO().slice(0, 8) + '01', -1).slice(0, 8) + '01'; return { from: f, to: shiftDays(todayISO().slice(0, 8) + '01', -1) }; }],
+  ['ytd', 'This year', () => ({ from: todayISO().slice(0, 4) + '-01-01', to: todayISO() })],
+  ['3M', '3M', () => ago(92)], ['6M', '6M', () => ago(183)], ['1Y', '1Y', () => ago(365)], ['2Y', '2Y', () => ago(730)],
+  ['all', 'All', () => ({ from: allTxns().reduce((m, t) => (t.date < m ? t.date : m), todayISO()), to: todayISO() })]];
+function thisMonthRangeG() { return { from: todayISO().slice(0, 8) + '01', to: todayISO() }; }
 const GBY = [['day', 'Day'], ['week', 'Week'], ['month', 'Month']];
 const DEFAULT_GRAPHS = [{ type: 'spend' }, { type: 'inout' }, { type: 'spend', cat: 'FOOD_AND_DRINK' }, { type: 'spend', cat: 'RENT_AND_UTILITIES' }, { type: 'networth' }];
 let graphs = store.get('graphs', null) || DEFAULT_GRAPHS.map((g, i) => ({ id: 'd' + i, period: '1Y', by: 'month', ...g }));
@@ -599,13 +605,15 @@ const meanOf = (v) => v.reduce((t, y) => t + y, 0) / (v.length || 1);
 const catColor = (k) => PALETTE[[...(k || '')].reduce((s, c) => s + c.charCodeAt(0), 0) % 8];
 function gRange(g) {
   if (g.period === 'Custom' && g.from) return { from: g.from, to: g.to && g.to < todayISO() ? g.to : todayISO() };
-  return { from: shiftDays(todayISO(), -(GPERIODS.find((p) => p[0] === g.period) || GPERIODS[2])[1] + 1), to: todayISO() };
+  return (GPERIODS.find((p) => p[0] === g.period) || GPERIODS[5])[2]();
 }
-const periodLabel = (g) => (g.period === 'Custom' && g.from ? `${shortDay(gRange(g).from)} – ${shortDay(gRange(g).to)}` : g.period);
+const periodLabel = (g) => (g.period === 'Custom' && g.from ? `${shortDay(gRange(g).from)} – ${shortDay(gRange(g).to)}` : (GPERIODS.find((p) => p[0] === g.period) || [, g.period])[1]);
 function bucketKeys(g) {
-  const { from, to } = gRange(g), keys = [];
-  const by = g.by === 'day' && daysBetween(from, to) > 183 ? 'week' : g.by || 'month';
-  for (let d = from; d <= to; d = shiftDays(d, 1)) { const k = bucketOf(by, d); if (keys[keys.length - 1] !== k) keys.push(k); }
+  const { from, to } = gRange(g), span = daysBetween(from, to);
+  const make = (by) => { const keys = []; for (let d = from; d <= to; d = shiftDays(d, 1)) { const k = bucketOf(by, d); if (keys[keys.length - 1] !== k) keys.push(k); } return keys; };
+  let by = g.by === 'day' && span > 183 ? 'week' : g.by || 'month', keys = make(by);
+  if (keys.length < 3 && by === 'month') keys = make((by = span > 45 ? 'week' : 'day'));
+  if (keys.length < 3 && by === 'week') keys = make((by = 'day'));
   return { keys, by, from, to };
 }
 // Past balances: saved daily snapshots when we have them, otherwise worked backwards from today's balance through posted transactions.
@@ -640,7 +648,7 @@ function series(g) {
   const base = { keys, by, from, to, kind: 'bars' };
   if (g.type === 'spend') return { ...base, sets: [{ c: g.cat ? catColor(g.cat) : '#ff5a5f', v: sumBy(spending().filter((t) => (!g.cat || t.category === g.cat) && (!g.merchant || t.name === g.merchant)), 1) }] };
   if (g.type === 'income') return { ...base, sets: [{ c: '#1fd286', v: sumBy(income(), -1) }] };
-  if (g.type === 'inout') return { ...base, sets: [{ c: '#1fd286', l: 'In', v: sumBy(income(), -1) }, { c: '#ff5a5f', l: 'Out', v: sumBy(spending(), 1) }] };
+  if (g.type === 'inout') return { ...base, sets: [{ c: '#1fd286', l: 'Income', v: sumBy(income(), -1) }, { c: '#ff5a5f', l: 'Spending', v: sumBy(spending(), 1) }] };
   if (g.type === 'networth') {
     const hist = (data.history || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
     return { ...base, kind: 'line', sets: [{ v: keys.map((k) => { const e = bucketEnd(by, k, to); let last = null; for (const p of hist) if (p.date <= e) last = p.assets - p.debts; return last; }) }] };
@@ -688,22 +696,21 @@ function linesChart(s, onScrub) {
 function graphCard(g, opts = {}) {
   const s = series(g), first = s.sets[0].v, big = h('div', { class: 'big fit' }), sub = h('div', { class: 'gsub' });
   const per = { month: 'mo', week: 'wk', day: 'day' }[s.by];
+  const lbl = (i) => (s.by === 'month' ? monthName(s.keys[i], true) : s.by === 'week' ? 'Week of ' + shortDay(s.keys[i]) : dayName(s.keys[i]));
   const show = (sc) => {
     if (s.kind === 'line') {
       const pts = first.filter((v) => v != null), cur = sc ? sc.v : pts[pts.length - 1];
       big.textContent = cur == null ? '—' : money(cur, true);
       const ch = pts.length > 1 ? pts[pts.length - 1] - pts[0] : null;
       sub.className = 'gsub ' + (sc ? 'muted' : ch == null ? 'muted' : ch >= 0 ? 'pos' : 'neg');
-      sub.textContent = sc ? sc.label : ch == null ? 'Not enough history yet' : `${ch >= 0 ? '▲' : '▼'} ${money(Math.abs(ch))} over ${periodLabel(g)}`;
-    } else if (s.sets.length > 1) {
-      const [a, b] = s.sets.map((x) => (sc ? x.v[sc.i] : x.v.reduce((t, y) => t + y, 0))), net = a - b;
-      big.textContent = (net >= 0 ? '+' : '−') + money(Math.abs(net)); big.className = 'big fit ' + (net >= 0 ? 'pos' : 'neg');
-      sub.className = 'gsub muted'; sub.textContent = `${sc ? sc.label : periodLabel(g)}: ${money(a)} in · ${money(b)} out`;
-    } else {
-      const tot = first.reduce((t, y) => t + y, 0), avg = tot / first.length;
-      big.textContent = money(sc ? first[sc.i] : avg, !!sc);
-      sub.className = 'gsub muted'; sub.textContent = sc ? sc.label : `avg per ${per} · ${money(tot)} total`;
+      sub.textContent = sc ? sc.label : ch == null ? 'Not enough history yet' : `${ch >= 0 ? '▲' : '▼'} ${money(Math.abs(ch))} since ${shortDay(s.from)}`;
+      return;
     }
+    const i = sc ? sc.i : s.keys.length - 1;
+    if (s.sets.length > 1) {
+      big.className = 'big fit'; big.replaceChildren(h('span', { class: 'pos' }, '+' + money(s.sets[0].v[i])), h('span', { class: 'gslash' }, ' / '), h('span', { class: 'neg' }, '−' + money(s.sets[1].v[i])));
+    } else big.textContent = money(first[i], true);
+    sub.className = 'gsub muted'; sub.textContent = lbl(i) + (sc || s.sets.length > 1 ? '' : ` · avg ${money(meanOf(first))} per ${per}`);
   };
   show(null);
   const chart = s.kind === 'line'
@@ -714,9 +721,9 @@ function graphCard(g, opts = {}) {
       opts.edit ? h('button', { class: 'gbtn', 'aria-label': 'Edit graph', onclick: opts.edit }, '•••') : null,
       opts.save ? h('button', { class: 'gbtn', onclick: (e) => { graphs.push({ ...g, id: Date.now().toString(36) }); saveGraphs(); e.target.textContent = 'Added'; e.target.disabled = true; } }, '+ Graphs') : null),
     big, sub, chart || h('div', { class: 'empty small' }, 'Not enough history yet'),
-    s.sets.length > 1 ? h('div', { class: 'legend' }, s.sets.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), `${x.l} · avg ${money(meanOf(x.v))}`))) : null,
-    opts.edit ? h('div', { class: 'gper' }, [...GPERIODS.map(([p]) => p), 'Custom'].map((p) => h('button', { class: 'chip' + (g.period === p ? ' on' : ''),
-      onclick: () => { if (p === 'Custom') return opts.edit('Custom'); g.period = p; saveGraphs(); render(); } }, p === 'Custom' && g.period === 'Custom' ? periodLabel(g) : p))) : null);
+    s.sets.length > 1 ? h('div', { class: 'legend' }, s.sets.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), `${x.l} · avg ${money(meanOf(x.v))}/${per}`))) : null,
+    opts.edit ? h('div', { class: 'gper' }, [...GPERIODS.map(([p, l]) => [p, l]), ['Custom', 'Custom']].map(([p, pl]) => h('button', { class: 'chip' + (g.period === p ? ' on' : ''),
+      onclick: () => { if (p === 'Custom') return opts.edit('Custom'); g.period = p; saveGraphs(); render(); } }, p === 'Custom' && g.period === 'Custom' ? periodLabel(g) : pl))) : null);
 }
 function viewGraphs(el) {
   if (!data || !data.connections.length) return noData(el);
@@ -747,7 +754,7 @@ function openGraphEditor(orig, preset) {
           h('input', { type: 'checkbox', class: 'switch', checked: f.accts.includes(a.account_id) ? true : null,
             onchange: (e) => { f.accts = e.target.checked ? [...f.accts, a.account_id] : f.accts.filter((x) => x !== a.account_id); renderPanel(); } })))));
     }
-    el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Period'), chips([...GPERIODS.map(([p]) => [p, p]), ['Custom', 'Custom']], 'period'),
+    el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Period'), chips([...GPERIODS.map(([p, l]) => [p, l]), ['Custom', 'Custom']], 'period'),
       f.period === 'Custom' ? h('div', { class: 'gdates' }, ['from', 'to'].map((key) => h('div', { class: 'field' }, h('label', {}, key === 'from' ? 'From' : 'To'),
         h('input', { type: 'date', value: f[key], max: todayISO(), onchange: (e) => { if (e.target.value) { f[key] = e.target.value; if (f.from > f.to) [f.from, f.to] = [f.to, f.from]; renderPanel(); } } })))) : null,
       h('div', { class: 'label', style: 'margin-top:12px' }, 'Group by'), chips(GBY, 'by', ([v]) => v !== 'day' || daysBetween(gRange(f).from, gRange(f).to) <= 183)));
