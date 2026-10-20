@@ -222,7 +222,9 @@ function netWorth(results) {
 async function recordNetWorth(env, results) {
   const history = await getJSON(env, HISTORY_KEY, []);
   const day = new Date().toISOString().slice(0, 10);
-  const point = { date: day, ...netWorth(results) };
+  const accounts = {};
+  for (const r of results) for (const a of r.accounts || []) accounts[a.account_id] = a.balances.current || 0;
+  const point = { date: day, ...netWorth(results), accounts };
   const last = history[history.length - 1];
   if (last && last.date === day) history[history.length - 1] = point;
   else history.push(point);

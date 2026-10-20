@@ -278,3 +278,20 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 @media (prefers-reduced-motion: reduce) { .atile.editing { animation: none; } }
 .card.alloc { padding: 14px 16px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
 .atile .pend-amt { overflow: hidden; text-overflow: ellipsis; }
+
+/* graphs */
+.card.graph.flat { background: transparent; border: 0; padding: 4px 0 10px; margin: 0 0 6px; }
+.ghead { display: flex; align-items: center; gap: 8px; margin-bottom: 2px; }
+.gtitle { flex: 1; min-width: 0; font-size: 13px; font-weight: 700; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gbtn { flex: none; border: 1px solid var(--line); background: var(--card2); color: var(--fg); border-radius: 999px; padding: 4px 11px; font-size: 12px; font-weight: 700; }
+.gbtn[disabled] { opacity: .6; }
+.gsub { font-size: 12px; font-weight: 600; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gsub.muted { color: var(--muted); }
+.card.graph .big { white-space: nowrap; overflow: hidden; }
+.gbars { touch-action: pan-y; }
+.gbars g { transition: opacity .15s; }
+.gbars g.dim { opacity: .35; }
+.presets.wrap { flex-wrap: wrap; overflow: visible; margin: 6px 0 0; padding: 0; }
+.field select { width: 100%; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; background: var(--card2); font-size: 16px; -webkit-appearance: none; appearance: none; }
+.gmoves { display: flex; gap: 8px; }
+.gmoves .btn[disabled] { opacity: .4; }

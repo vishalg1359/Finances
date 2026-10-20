@@ -305,7 +305,7 @@ function setGlow(dir) { document.body.style.setProperty('--glow', dir > 0 ? 'rgb
 
 // ---------- shared pieces ----------
 const greeting = () => { const hr = new Date().getHours(); return hr < 5 ? 'Good evening' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening'; };
-const TITLES = { overview: 'Overview', categories: 'Categories', merchants: 'Merchants', paidwith: 'Paid with', cashflow: 'Cash flow' };
+const TITLES = { overview: 'Overview', categories: 'Categories', merchants: 'Merchants', paidwith: 'Paid with', graphs: 'Graphs' };
 let mainIds = store.get('main', null);
 const isMain = (a) => (mainIds ? mainIds.includes(a.account_id) : a.subtype === 'checking');
 const isDebt = (a) => a.type === 'credit' || a.type === 'loan';
@@ -359,15 +359,15 @@ function viewOverview(el) {
   const pendSum = (a) => pendingFor(a).reduce((s, t) => s + t.amount, 0);
   const owePend = owe.filter((a) => a.type === 'credit').reduce((s, a) => s + pendSum(a), 0);
   el.append(h('div', { class: 'tiles' },
-    h('div', { class: 'tile tap', onclick: () => { const ids = have.filter(isMain).map((a) => a.account_id); openSheet({ title: have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main accounts', list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => h('button', { class: 'btn small', onclick: () => openPanel('settings') }, 'Choose accounts') }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }),
+    h('div', { class: 'tile tap', onclick: () => { const ids = have.filter(isMain).map((a) => a.account_id); openSheet({ title: have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main accounts', graph: { type: 'balance', accts: ids, period: '6M', by: 'week' }, list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => h('button', { class: 'btn small', onclick: () => openPanel('settings') }, 'Choose accounts') }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }),
         have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main'),
       num('tile-num', 'chk' + conn, sum(have.filter(isMain)))),
-    h('div', { class: 'tile tap', onclick: () => { const cards = owe.filter((a) => a.type === 'credit'), ids = cards.map((a) => a.account_id); openSheet({ title: 'Credit cards', list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => split(sum(cards), owePend) }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
+    h('div', { class: 'tile tap', onclick: () => { const cards = owe.filter((a) => a.type === 'credit'), ids = cards.map((a) => a.account_id); openSheet({ title: 'Credit cards', graph: { type: 'balance', accts: ids, period: '6M', by: 'week', title: 'Credit card balance' }, list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => split(sum(cards), owePend) }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
       num('tile-num', 'owe' + conn, sum(owe.filter((a) => a.type === 'credit'))), owePend ? h('div', { class: 'tile-pend' }, '+' + money(owePend, true) + ' pending') : null)));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
   const pace = paceChart();
-  el.append(h('div', { class: 'card tap spendcard', onclick: () => openSheet({ title: 'Spent this month', list: () => spending().filter((t) => monthKey(t.date) === m), head: () => h('button', { class: 'btn small', onclick: () => { closePanel(true); showView('categories'); } }, 'By category') }) },
+  el.append(h('div', { class: 'card tap spendcard', onclick: () => openSheet({ title: 'Spent this month', graph: { type: 'spend', period: '1Y', by: 'month' }, list: () => spending().filter((t) => monthKey(t.date) === m), head: () => h('button', { class: 'btn small', onclick: () => { closePanel(true); showView('categories'); } }, 'By category') }) },
     h('div', { class: 'label' }, 'Spent this month'), num('big', 'spent' + conn, spent, true),
     pace ? h('div', { class: 'linewrap' }, pace.svg) : null,
     pace ? h('div', { class: 'pace-foot' },
@@ -388,7 +388,7 @@ function viewOverview(el) {
     ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage', '#a37bff']]
     .map(([l, f, c]) => ({ l, c, v: sum(have.filter(f)) })).filter((x) => x.v > 0);
   const allocTotal = alloc.reduce((s, x) => s + x.v, 0);
-  if (alloc.length > 1) el.append(h('div', { class: 'card alloc tap', onclick: () => { const ids = have.map((a) => a.account_id); openSheet({ title: 'Money you have', list: () => allTxns().filter((t) => ids.includes(t.account_id)) }); } },
+  if (alloc.length > 1) el.append(h('div', { class: 'card alloc tap', onclick: () => { const ids = have.map((a) => a.account_id); openSheet({ title: 'Money you have', graph: { type: 'balance', accts: ids, period: '1Y', by: 'week' }, list: () => allTxns().filter((t) => ids.includes(t.account_id)) }); } },
     h('div', { class: 'allocbar' }, alloc.map((x) => h('i', { style: `flex:${x.v};background:${x.c}` }))),
     h('div', { class: 'allockey' }, alloc.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), x.l, h('b', {}, Math.round((x.v / allocTotal) * 100) + '%'))))));
   if (accs.length || manual.length) el.append(accountGrid(accs.filter((a) => !emptyParent(a)), manual, pendingFor, split));
@@ -433,7 +433,7 @@ function accountGrid(accs, manual, pendingFor, split) {
       if (editing) { picked.has(t.id) ? picked.delete(t.id) : picked.add(t.id); draw(); return; }
       if (t.loan) return openPanel('loans');
       if (t.subs) return openRecurring();
-      openSheet({ title: t.name, list: () => recent(idsOf(t), 1e9),
+      openSheet({ title: t.name, graph: { type: 'balance', accts: idsOf(t), period: '6M', by: 'week', title: t.name }, list: () => recent(idsOf(t), 1e9),
         head: () => t.members ? h('div', { class: 'card list' }, t.members.map((m) => h('div', { class: 'row' }, m.mark.cloneNode(true), h('div', { class: 'grow' }, h('div', { class: 'name' }, m.name)), h('div', { class: 'amt' + (m.debt ? ' neg' : '') }, money(m.value, true)))))
           : t.a && t.a.type === 'credit' && t.pend ? split(t.value, t.pend) : null });
     };
@@ -518,7 +518,7 @@ function rangeBar(rerender) {
 }
 
 // ---------- Breakdowns (categories / merchants / paid with) ----------
-function breakdown(el, keyOf, labelOf, layout, icon) {
+function breakdown(el, keyOf, labelOf, layout, icon, graphOf) {
   if (!data || !data.connections.length) return noData(el);
   { const lb = loadingBanner(); if (lb) el.append(lb); }
   range = range || thisMonthRange();
@@ -551,7 +551,7 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
       h('div', { class: 'ccard-name' }, labelOf(g.k)), h('div', { class: 'ccard-amt' }, money(g.v)))));
     el.append(grid);
     const opened = sorted.filter((g) => open.has(g.k));
-    for (const g of opened) el.append(h('div', { class: 'card' }, h('h2', {}, labelOf(g.k)), g.l.sort((a, b) => (a.date < b.date ? 1 : -1)).map(txnRow)));
+    for (const g of opened) el.append(h('div', { class: 'card' }, h('h2', {}, labelOf(g.k)), graphOf ? graphCard(graphOf(g.k), { flat: true, save: true }) : null, g.l.sort((a, b) => (a.date < b.date ? 1 : -1)).map(txnRow)));
     return;
   }
   const card = h('div', { class: 'card list' });
@@ -561,49 +561,180 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
       icon(g), h('div', { class: 'grow' }, h('div', { class: 'name' }, labelOf(g.k)),
         h('div', { class: 'bar' }, h('i', { style: `width:${Math.max(2, (g.v / max) * 100)}%;background:${g.color}` }))),
       h('div', { class: 'amt' }, money(g.v, true))));
-    if (isOpen) card.append(h('div', { class: 'drill' }, g.l.sort((a, b) => (a.date < b.date ? 1 : -1)).map(txnRow)));
+    if (isOpen) card.append(h('div', { class: 'drill' }, graphOf ? graphCard(graphOf(g.k), { flat: true, save: true }) : null, g.l.sort((a, b) => (a.date < b.date ? 1 : -1)).map(txnRow)));
   }
   el.append(card);
 }
 const catBadge = (g) => h('div', { class: 'cat', style: `background:${g.color}22;color:${g.color}` }, nice(g.k)[0]);
-function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) => nice(k), 'donut', catBadge); }
+function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) => nice(k), 'donut', catBadge, (k) => ({ type: 'spend', cat: k, period: '1Y', by: 'month' })); }
 function viewMerchants(el) {
-  breakdown(el, (t) => t.name || 'Unknown', (k) => k, 'rows', (g) => logo(g.l[0]));
+  breakdown(el, (t) => t.name || 'Unknown', (k) => k, 'rows', (g) => logo(g.l[0]), (k) => ({ type: 'spend', merchant: k, period: '1Y', by: 'month' }));
   const subs = data && data.connections.length ? subscriptions() : [];
   if (subs.length) el.append(h('div', { class: 'card list tap', onclick: openRecurring }, h('h2', {}, 'Recurring', h('span', {}, money(subs.reduce((t, x) => t + x.monthly, 0), true) + '/mo')),
     subs.slice(0, 5).map((x) => h('div', { class: 'row' }, logo(x), h('div', { class: 'grow' }, h('div', { class: 'name' }, x.name), h('div', { class: 'sub' }, x.every)), h('div', { class: 'amt' }, money(x.amount, true))))));
 }
 function viewPaidWith(el) {
   const accs = Object.fromEntries(allAccounts().map((a) => [a.account_id, a]));
-  breakdown(el, (t) => t.account_id, (k) => (accs[k] ? accLabel(accs[k]) : 'Other'), 'cards');
+  breakdown(el, (t) => t.account_id, (k) => (accs[k] ? accLabel(accs[k]) : 'Other'), 'cards', null, (k) => ({ type: 'spend', accts: [k], period: '1Y', by: 'month' }));
 }
 
-// ---------- Cash flow ----------
-function viewCashflow(el) {
+// ---------- graphs ----------
+const GTYPES = [['spend', 'Spending'], ['income', 'Money in'], ['inout', 'In vs out'], ['balance', 'Balance'], ['networth', 'Net worth']];
+const GPERIODS = [['3M', 92], ['6M', 183], ['1Y', 365], ['2Y', 730]];
+const GBY = [['day', 'Day'], ['week', 'Week'], ['month', 'Month']];
+const DEFAULT_GRAPHS = [{ type: 'spend' }, { type: 'inout' }, { type: 'spend', cat: 'FOOD_AND_DRINK' }, { type: 'spend', cat: 'RENT_AND_UTILITIES' }, { type: 'networth' }];
+let graphs = store.get('graphs', null) || DEFAULT_GRAPHS.map((g, i) => ({ id: 'd' + i, period: '1Y', by: 'month', ...g }));
+const saveGraphs = () => store.set('graphs', graphs);
+const everyAccount = () => (data ? data.connections : []).flatMap((c) => (c.accounts || []).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
+const weekStart = (iso) => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return isoOf(d); };
+const bucketOf = (by, iso) => (by === 'month' ? monthKey(iso) : by === 'week' ? weekStart(iso) : iso);
+const bucketEnd = (by, k) => {
+  const e = by === 'month' ? shiftDays(shiftDays(k + '-01', 32).slice(0, 8) + '01', -1) : by === 'week' ? shiftDays(k, 6) : k;
+  return e > todayISO() ? todayISO() : e;
+};
+const bucketLabel = (by, k) => (by === 'month' ? monthName(k) : shortDay(k));
+const catColor = (k) => PALETTE[[...(k || '')].reduce((s, c) => s + c.charCodeAt(0), 0) % 8];
+function bucketKeys(g) {
+  const days = (GPERIODS.find((p) => p[0] === g.period) || GPERIODS[2])[1], keys = [];
+  const by = g.by === 'day' && days > 183 ? 'week' : g.by || 'month';
+  for (let d = shiftDays(todayISO(), -days + 1); d <= todayISO(); d = shiftDays(d, 1)) { const k = bucketOf(by, d); if (keys[keys.length - 1] !== k) keys.push(k); }
+  return { keys, by };
+}
+// Past balances: saved daily snapshots when we have them, otherwise worked backwards from today's balance through posted transactions.
+function balanceAt(ids) {
+  const accs = everyAccount().filter((a) => ids.includes(a.account_id)), allDebt = accs.every(isDebt);
+  const snaps = new Map((data.history || []).filter((p) => p.accounts).map((p) => [p.date, p.accounts]));
+  const posted = allTxns().filter((t) => !t.pending);
+  const per = accs.map((a) => {
+    const list = posted.filter((t) => t.account_id === a.account_id), firstSnap = [...snaps.keys()].find((d) => snaps.get(d)[a.account_id] != null);
+    const oldest = [list.length ? list[list.length - 1].date : null, firstSnap].filter(Boolean).sort()[0] || todayISO();
+    return { a, list, oldest, sign: isDebt(a) ? -1 : 1 };
+  });
+  return (day) => {
+    let total = 0, any = false;
+    for (const { a, list, oldest, sign } of per) {
+      if (day < oldest) continue;
+      const snap = snaps.get(day);
+      let v = snap && snap[a.account_id] != null ? snap[a.account_id] : (a.balances.current || 0) + sign * list.reduce((s, t) => s + (t.date > day ? t.amount : 0), 0);
+      any = true; total += allDebt ? v : isDebt(a) ? -v : v;
+    }
+    return any ? total : null;
+  };
+}
+function series(g) {
+  const { keys, by } = bucketKeys(g), idx = new Map(keys.map((k, i) => [k, i]));
+  const ids = g.accts && g.accts.length ? new Set(g.accts) : null;
+  const sumBy = (list, sign) => {
+    const v = keys.map(() => 0);
+    for (const t of list) { if (ids && !ids.has(t.account_id)) continue; const i = idx.get(bucketOf(by, t.date)); if (i != null) v[i] += sign * t.amount; }
+    return v;
+  };
+  const base = { keys, by, kind: 'bar' };
+  if (g.type === 'spend') return { ...base, sets: [{ c: g.cat ? catColor(g.cat) : 'var(--bad)', v: sumBy(spending().filter((t) => (!g.cat || t.category === g.cat) && (!g.merchant || t.name === g.merchant)), 1) }] };
+  if (g.type === 'income') return { ...base, sets: [{ c: 'var(--good)', v: sumBy(income(), -1) }] };
+  if (g.type === 'inout') return { ...base, sets: [{ c: 'var(--good)', l: 'In', v: sumBy(income(), -1) }, { c: 'var(--bad)', l: 'Out', v: sumBy(spending(), 1) }] };
+  if (g.type === 'networth') {
+    const hist = (data.history || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+    return { ...base, kind: 'line', sets: [{ v: keys.map((k) => { const e = bucketEnd(by, k); let last = null; for (const p of hist) if (p.date <= e) last = p.assets - p.debts; return last; }) }] };
+  }
+  const at = balanceAt(ids ? [...ids] : allAccounts().filter((a) => !isDebt(a)).map((a) => a.account_id));
+  return { ...base, kind: 'line', sets: [{ v: keys.map((k) => at(bucketEnd(by, k))) }] };
+}
+function gTitle(g) {
+  if (g.title) return g.title;
+  const accs = (g.accts || []).map((id) => everyAccount().find((a) => a.account_id === id)).filter(Boolean);
+  const an = accs.length === 1 ? accs[0].name : accs.length ? accs.length + ' accounts' : '';
+  const base = g.type === 'spend' ? g.merchant || (g.cat ? nice(g.cat) : 'Spending') : (GTYPES.find((t) => t[0] === g.type) || [, ''])[1];
+  if (g.type === 'balance') return an || 'Money you have';
+  return an && g.type !== 'networth' ? base + ' · ' + an : base;
+}
+function barsChart(s, onScrub) {
+  const W = 340, H = 120, n = s.keys.length, bw = W / n, m = s.sets.length, max = Math.max(1, ...s.sets.flatMap((x) => x.v));
+  const step = Math.ceil(n / 6), gw = bw * 0.7, w = gw / m;
+  const svg = h('svg', { class: 'chart bars', viewBox: `0 0 ${W} ${H + 16}`, html: s.keys.map((k, i) =>
+    `<g data-i="${i}">` + s.sets.map((x, j) => { const bh = (Math.max(0, x.v[i]) / max) * (H - 4);
+      return `<rect class="b" style="animation-delay:${Math.min(i, 30) * 20}ms" x="${(i * bw + (bw - gw) / 2 + j * w).toFixed(1)}" y="${(H - bh).toFixed(1)}" width="${Math.max(1, w - (m > 1 ? 1 : 0)).toFixed(1)}" height="${Math.max(bh, 1).toFixed(1)}" rx="${Math.min(3, w / 3).toFixed(1)}" fill="${x.c}"/>`; }).join('') +
+    ((n - 1 - i) % step === 0 ? `<text x="${(i * bw + bw / 2).toFixed(1)}" y="${H + 13}" font-size="10" text-anchor="middle" fill="var(--dim)">${bucketLabel(s.by, k)}</text>` : '') + '</g>').join('') });
+  const wrap = h('div', { class: 'linewrap gbars' }, svg);
+  const pick = (e) => {
+    const r = wrap.getBoundingClientRect(), i = Math.min(n - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * n)));
+    svg.querySelectorAll('g').forEach((gg) => gg.classList.toggle('dim', +gg.dataset.i !== i));
+    onScrub({ i, label: bucketLabel(s.by, s.keys[i]) });
+  };
+  const end = () => { svg.querySelectorAll('g').forEach((gg) => gg.classList.remove('dim')); onScrub(null); };
+  wrap.addEventListener('pointerdown', pick); wrap.addEventListener('pointermove', (e) => { if (e.buttons || e.pointerType === 'touch') pick(e); });
+  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) wrap.addEventListener(ev, end);
+  return wrap;
+}
+function graphCard(g, opts = {}) {
+  const s = series(g), first = s.sets[0].v, big = h('div', { class: 'big fit' }), sub = h('div', { class: 'gsub' });
+  const per = { month: 'mo', week: 'wk', day: 'day' }[s.by];
+  const show = (sc) => {
+    if (s.kind === 'line') {
+      const pts = first.filter((v) => v != null), cur = sc ? sc.v : pts[pts.length - 1];
+      big.textContent = cur == null ? '—' : money(cur, true);
+      const ch = pts.length > 1 ? pts[pts.length - 1] - pts[0] : null;
+      sub.className = 'gsub ' + (sc ? 'muted' : ch == null ? 'muted' : ch >= 0 ? 'pos' : 'neg');
+      sub.textContent = sc ? sc.label : ch == null ? 'Not enough history yet' : `${ch >= 0 ? '▲' : '▼'} ${money(Math.abs(ch))} over ${g.period}`;
+    } else if (s.sets.length > 1) {
+      const [a, b] = s.sets.map((x) => (sc ? x.v[sc.i] : x.v.reduce((t, y) => t + y, 0))), net = a - b;
+      big.textContent = (net >= 0 ? '+' : '−') + money(Math.abs(net)); big.className = 'big fit ' + (net >= 0 ? 'pos' : 'neg');
+      sub.className = 'gsub muted'; sub.textContent = `${sc ? sc.label : g.period}: ${money(a)} in · ${money(b)} out`;
+    } else {
+      const tot = first.reduce((t, y) => t + y, 0), avg = tot / first.length;
+      big.textContent = money(sc ? first[sc.i] : avg, !!sc);
+      sub.className = 'gsub muted'; sub.textContent = sc ? sc.label : `avg per ${per} · ${money(tot)} total`;
+    }
+  };
+  show(null);
+  const chart = s.kind === 'line'
+    ? lineChart(s.keys.map((k, i) => ({ v: first[i], date: bucketEnd(s.by, k) })).filter((p) => p.v != null), (p) => show(p ? { v: p.v, label: dayName(p.date) } : null))
+    : barsChart(s, show);
+  return h('div', { class: 'card graph' + (opts.flat ? ' flat' : '') },
+    h('div', { class: 'ghead' }, h('div', { class: 'gtitle' }, gTitle(g)),
+      opts.edit ? h('button', { class: 'gbtn', 'aria-label': 'Edit graph', onclick: opts.edit }, '•••') : null,
+      opts.save ? h('button', { class: 'gbtn', onclick: (e) => { graphs.push({ ...g, id: Date.now().toString(36) }); saveGraphs(); e.target.textContent = 'Added'; e.target.disabled = true; } }, '+ Graphs') : null),
+    big, sub, chart || h('div', { class: 'empty small' }, 'Not enough history yet'),
+    s.sets.length > 1 ? h('div', { class: 'legend' }, s.sets.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), x.l))) : null);
+}
+function viewGraphs(el) {
   if (!data || !data.connections.length) return noData(el);
   { const lb = loadingBanner(); if (lb) el.append(lb); }
-  const months = lastMonths(12), out = byMonth(spending()), inc = byMonth(income(), -1);
-  if (!months.some((m) => out[m] || inc[m])) { el.append(h('div', { class: 'empty small' }, 'No activity yet')); return; }
-  const W = 320, H = 120, max = Math.max(1, ...months.flatMap((m) => [out[m] || 0, inc[m] || 0])), bw = W / months.length;
-  const svg = h('svg', { class: 'chart bars', viewBox: `0 0 ${W} ${H + 16}` });
-  svg.innerHTML = months.map((m, i) => {
-    const a = ((inc[m] || 0) / max) * (H - 4), b = (Math.max(0, out[m] || 0) / max) * (H - 4), x = i * bw;
-    return `<rect class="b" style="animation-delay:${i * 30}ms" x="${x + bw * 0.14}" y="${H - a}" width="${bw * 0.34}" height="${Math.max(a, 1)}" rx="2" fill="var(--good)"/>` +
-      `<rect class="b" style="animation-delay:${i * 30 + 15}ms" x="${x + bw * 0.52}" y="${H - b}" width="${bw * 0.34}" height="${Math.max(b, 1)}" rx="2" fill="var(--bad)"/>` +
-      `<text x="${x + bw / 2}" y="${H + 13}" font-size="10" text-anchor="middle" fill="var(--dim)">${monthName(m)[0]}</text>`;
-  }).join('');
-  const net = months.reduce((s, m) => s + (inc[m] || 0) - (out[m] || 0), 0);
-  setGlow(net);
-  el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, 'Net · 12 months'),
-    num('hero-num ' + (net >= 0 ? 'pos' : 'neg'), 'cf' + conn, net), svg,
-    h('div', { class: 'legend' }, h('span', {}, h('i', { style: 'background:var(--good)' }), 'In'), h('span', {}, h('i', { style: 'background:var(--bad)' }), 'Out'))));
-  const mx = Math.max(1, ...months.flatMap((m) => [inc[m] || 0, out[m] || 0]));
-  el.append(h('div', { class: 'card list' }, months.slice().reverse().filter((m) => out[m] || inc[m]).map((m) => {
-    const n = (inc[m] || 0) - (out[m] || 0);
-    return h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, monthName(m, true)),
-      h('div', { class: 'duo' }, h('i', { class: 'in', style: `width:${((inc[m] || 0) / mx) * 100}%` }), h('i', { class: 'out', style: `width:${(Math.max(0, out[m] || 0) / mx) * 100}%` }))),
-      h('div', { class: 'amt ' + (n >= 0 ? 'pos' : 'neg') }, (n >= 0 ? '+' : '') + money(n)));
-  })));
+  for (const g of graphs) el.append(graphCard(g, { edit: () => openGraphEditor(g) }));
+  el.append(h('button', { class: 'btn', onclick: () => openGraphEditor(null) }, '+ Add graph'));
+}
+function openGraphEditor(orig) {
+  const f = orig ? { ...orig, accts: [...(orig.accts || [])] } : { type: 'spend', period: '1Y', by: 'month', accts: [] };
+  const chips = (opts, key, cond) => h('div', { class: 'presets wrap' }, opts.filter(cond || (() => true)).map(([v, l]) =>
+    h('button', { class: 'chip' + (f[key] === v ? ' on' : ''), onclick: () => { f[key] = v; renderPanel(); } }, l)));
+  const pick = (label, key, options) => h('div', { class: 'field' }, h('label', {}, label),
+    h('select', { onchange: (e) => { f[key] = e.target.value || null; renderPanel(); } },
+      h('option', { value: '' }, 'All'), options.map(([v, l]) => h('option', { value: v, selected: f[key] === v ? true : null }, l))));
+  openSheet({ title: orig ? 'Edit graph' : 'New graph', render: (el) => {
+    el.append(graphCard(f, { flat: true }));
+    el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Show'), chips(GTYPES, 'type')));
+    if (f.type === 'spend') {
+      const tot = {}; for (const t of spending()) if (t.amount > 0) { tot['c' + t.category] = (tot['c' + t.category] || 0) + t.amount; tot['m' + t.name] = (tot['m' + t.name] || 0) + t.amount; }
+      const top = (p) => Object.keys(tot).filter((k) => k[0] === p).sort((a, b) => tot[b] - tot[a]).map((k) => k.slice(1));
+      el.append(h('div', { class: 'card' }, pick('Category', 'cat', top('c').map((c) => [c, nice(c)])), pick('Merchant', 'merchant', top('m').slice(0, 60).map((m) => [m, m]))));
+    }
+    if (f.type !== 'networth') {
+      const accs = everyAccount().filter((a) => (f.type === 'balance' ? true : f.type === 'income' ? !isDebt(a) : true));
+      el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, f.accts.length ? 'Accounts' : 'Accounts · all'),
+        accs.map((a) => h('label', { class: 'row tap' }, mark(a.brand, a.institution), h('div', { class: 'grow' }, h('div', { class: 'name' }, a.name, h('span', { class: 'mask' }, ' ' + (a.mask || ''))), h('div', { class: 'sub' }, a.institution || '')),
+          h('input', { type: 'checkbox', class: 'switch', checked: f.accts.includes(a.account_id) ? true : null,
+            onchange: (e) => { f.accts = e.target.checked ? [...f.accts, a.account_id] : f.accts.filter((x) => x !== a.account_id); renderPanel(); } })))));
+    }
+    el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Period'), chips(GPERIODS.map(([p]) => [p, p]), 'period'),
+      h('div', { class: 'label', style: 'margin-top:12px' }, 'Group by'), chips(GBY, 'by', ([v]) => v !== 'day' || ['3M', '6M'].includes(f.period))));
+    const i = orig ? graphs.indexOf(orig) : -1;
+    const done = () => { if (f.type !== 'spend') { delete f.cat; delete f.merchant; } if (i >= 0) graphs[i] = f; else graphs.push({ ...f, id: Date.now().toString(36) }); saveGraphs(); closePanel(); render(); };
+    const move = (d) => { const j = i + d; if (j < 0 || j >= graphs.length) return; graphs.splice(i, 1); graphs.splice(j, 0, f); saveGraphs(); closePanel(); render(); };
+    el.append(h('button', { class: 'btn primary', onclick: done }, orig ? 'Save' : 'Add graph'));
+    if (i >= 0) el.append(h('div', { class: 'gmoves' }, h('button', { class: 'btn', disabled: i === 0 ? true : null, onclick: () => move(-1) }, 'Move up'),
+      h('button', { class: 'btn', disabled: i === graphs.length - 1 ? true : null, onclick: () => move(1) }, 'Move down')),
+      h('button', { class: 'btn danger', onclick: () => { graphs.splice(i, 1); saveGraphs(); closePanel(); render(); } }, 'Remove graph'));
+  } });
 }
 
 // ---------- transaction sheet ----------
@@ -614,6 +745,7 @@ function viewSheet(el) {
   if (sheet.render) return sheet.render(el);
   const head = sheet.head && sheet.head();
   if (head) el.append(head.classList.contains('card') || head.classList.contains('btn') ? head : h('div', { class: 'card' }, head));
+  if (sheet.graph) el.append(graphCard(sheet.graph, { save: true }));
   const list = sheet.list().slice().sort((a, b) => (a.pending !== b.pending ? (a.pending ? -1 : 1) : a.date < b.date ? 1 : -1));
   if (!list.length) return el.append(h('div', { class: 'empty small' }, 'No transactions yet'));
   const months = {};
@@ -729,7 +861,7 @@ function viewSettings(el) {
 }
 
 // ---------- layout ----------
-const VIEWS = { overview: viewOverview, categories: viewCategories, merchants: viewMerchants, paidwith: viewPaidWith, cashflow: viewCashflow };
+const VIEWS = { overview: viewOverview, categories: viewCategories, merchants: viewMerchants, paidwith: viewPaidWith, graphs: viewGraphs };
 function renderChips() {
   const box = $('conns'), conns = data ? data.connections : [];
   box.hidden = conns.length < 2;
