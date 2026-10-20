@@ -118,13 +118,20 @@ async function connect(item_id) {
 const shownConns = () => (data ? data.connections.filter((c) => conn === 'all' || c.item_id === conn) : []);
 const allAccounts = () => shownConns().flatMap((c) => (c.accounts || []).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
 const NOT_SPENDING = new Set(['INCOME', 'TRANSFER_IN', 'TRANSFER_OUT', 'LOAN_PAYMENTS']);
-const allTxns = () => (data ? data.transactions : []);
+let cats = store.get('cats', { tx: {}, rules: {} }), catsCache = null;
+const allTxns = () => {
+  if (!data) return [];
+  if (catsCache && catsCache.src === data.transactions && catsCache.v === cats) return catsCache.out;
+  const out = data.transactions.map((t) => { const c = cats.tx[t.transaction_id] || cats.rules[t.name]; return c && c !== t.category ? { ...t, category: c, origCategory: t.category } : t; });
+  catsCache = { src: data.transactions, v: cats, out };
+  return out;
+};
 const txns = () => { if (conn === 'all') return allTxns(); const ids = new Set(allAccounts().map((a) => a.account_id)); return allTxns().filter((t) => ids.has(t.account_id)); };
 // Finalized charges only; a refund cancels its matching charge, and partial refunds net against the merchant.
 let spendCache = { key: null, list: [] };
 function spending() {
   const all = txns(), key = (data && data.synced) + '|' + conn + '|' + all.length;
-  if (spendCache.key === key) return spendCache.list;
+  if (spendCache.key === key && spendCache.cats === cats) return spendCache.list;
   const list = all.filter((t) => !t.pending && !NOT_SPENDING.has(t.category) && t.category !== 'INCOME');
   const charges = list.filter((t) => t.amount > 0), refunds = list.filter((t) => t.amount < 0), drop = new Set();
   const names = new Set(charges.map((t) => t.name));
@@ -132,7 +139,7 @@ function spending() {
     const c = charges.find((x) => !drop.has(x.id) && x.name === r.name && Math.abs(x.amount + r.amount) < 0.01 && x.date <= r.date && daysBetween(x.date, r.date) <= 120);
     if (c) { drop.add(c.id); drop.add(r.id); }
   }
-  spendCache = { key, list: list.filter((t) => !drop.has(t.id) && (t.amount > 0 || names.has(t.name))) };
+  spendCache = { key, cats, list: list.filter((t) => !drop.has(t.id) && (t.amount > 0 || names.has(t.name))) };
   return spendCache.list;
 }
 const income = () => txns().filter((t) => t.amount < 0 && t.category === 'INCOME');
@@ -313,9 +320,32 @@ const isMain = (a) => (mainIds ? mainIds.includes(a.account_id) : a.subtype === 
 const isDebt = (a) => a.type === 'credit' || a.type === 'loan';
 const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const shortDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-const txnRow = (t) => h('div', { class: 'row' }, logo(t), h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name),
-  h('div', { class: 'sub' }, shortDay(t.date) + (t.pending ? ' · pending' : '') + (t.amount < 0 && t.category !== 'INCOME' && !NOT_SPENDING.has(t.category) ? ' · refund' : ''))),
+const txnRow = (t) => h('div', { class: 'row tap', onclick: (e) => { e.stopPropagation(); pickCategory(t); } }, logo(t), h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name),
+  h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + catName(t.category) + (t.pending ? ' · pending' : '') + (t.amount < 0 && t.category !== 'INCOME' && !NOT_SPENDING.has(t.category) ? ' · refund' : ''))),
   h('div', { class: 'amt ' + (t.amount < 0 ? 'pos' : 'neg') }, (t.amount < 0 ? '+' : '−') + money(Math.abs(t.amount), true)));
+const CAT_LIST = ['FOOD_AND_DRINK', 'RENT_AND_UTILITIES', 'GENERAL_MERCHANDISE', 'TRANSPORTATION', 'TRAVEL', 'ENTERTAINMENT', 'PERSONAL_CARE', 'MEDICAL', 'GENERAL_SERVICES', 'HOME_IMPROVEMENT', 'GOVERNMENT_AND_NON_PROFIT', 'BANK_FEES', 'OTHER', 'LOAN_PAYMENTS', 'INCOME', 'TRANSFER_OUT', 'TRANSFER_IN'];
+const catName = (c) => ({ TRANSFER_OUT: 'Transfer out', TRANSFER_IN: 'Transfer in', RENT_AND_UTILITIES: 'Rent & utilities', FOOD_AND_DRINK: 'Food & drink', GOVERNMENT_AND_NON_PROFIT: 'Government & nonprofit' }[c] || nice(c));
+function pickCategory(t) {
+  const orig = t.origCategory || t.category, ruled = !!cats.rules[t.name];
+  let all = ruled;
+  const close = () => { ov.classList.add('closing'); setTimeout(() => ov.remove(), 200); };
+  const apply = (c) => {
+    const tx = { ...cats.tx }, rules = { ...cats.rules };
+    if (all) { delete tx[t.transaction_id]; if (c === orig) delete rules[t.name]; else rules[t.name] = c; for (const x of data.transactions) if (x.name === t.name) delete tx[x.transaction_id]; }
+    else { if (c === (rules[t.name] || orig)) delete tx[t.transaction_id]; else tx[t.transaction_id] = c; }
+    cats = { tx, rules }; store.set('cats', cats); close(); render(); renderPanel();
+  };
+  const body = () => [
+    h('div', { class: 'pk-head' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name), h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + (t.amount < 0 ? '+' : '−') + money(Math.abs(t.amount), true))), h('button', { class: 'gbtn', onclick: close }, 'Done')),
+    h('div', { class: 'pk-scope' }, h('button', { class: 'chip' + (!all ? ' on' : ''), onclick: () => { all = false; draw(); } }, 'Just this one'),
+      h('button', { class: 'chip' + (all ? ' on' : ''), onclick: () => { all = true; draw(); } }, 'All from ' + t.name)),
+    h('div', { class: 'pk-list' }, CAT_LIST.map((c) => h('button', { class: 'pk-cat' + (c === t.category ? ' on' : ''), onclick: () => apply(c) },
+      catName(c), c === orig ? h('span', { class: 'muted' }, ' · bank\'s pick') : null, c.startsWith('TRANSFER') || c === 'INCOME' || c === 'LOAN_PAYMENTS' ? h('span', { class: 'muted' }, ' · not spending') : null))),
+  ];
+  const card = h('div', { class: 'pk-card' }), draw = () => card.replaceChildren(...body());
+  const ov = h('div', { class: 'picker', onclick: (e) => { if (e.target === ov) close(); } }, card);
+  draw(); document.body.append(ov);
+}
 const toggle = (k) => { open.has(k) ? open.delete(k) : open.add(k); render(); };
 function loadingBanner() {
   const l = loadingConns().filter((c) => conn === 'all' || c.item_id === conn);
@@ -568,7 +598,7 @@ function breakdown(el, keyOf, labelOf, layout, icon, graphOf) {
   el.append(card);
 }
 const catBadge = (g) => h('div', { class: 'cat', style: `background:${g.color}22;color:${g.color}` }, nice(g.k)[0]);
-function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) => nice(k), 'donut', catBadge, (k) => ({ type: 'spend', cat: k, period: '1Y', by: 'month' })); }
+function viewCategories(el) { breakdown(el, (t) => t.category || 'OTHER', (k) => catName(k), 'donut', catBadge, (k) => ({ type: 'spend', cat: k, period: '1Y', by: 'month' })); }
 function viewMerchants(el) {
   breakdown(el, (t) => t.name || 'Unknown', (k) => k, 'rows', (g) => logo(g.l[0]), (k) => ({ type: 'spend', merchant: k, period: '1Y', by: 'month' }));
   const subs = data && data.connections.length ? subscriptions() : [];
@@ -660,7 +690,7 @@ function gTitle(g) {
   if (g.title) return g.title;
   const accs = (g.accts || []).map((id) => everyAccount().find((a) => a.account_id === id)).filter(Boolean);
   const an = accs.length === 1 ? accs[0].name : accs.length ? accs.length + ' accounts' : '';
-  const base = g.type === 'spend' ? g.merchant || (g.cat ? nice(g.cat) : 'Spending') : (GTYPES.find((t) => t[0] === g.type) || [, ''])[1];
+  const base = g.type === 'spend' ? g.merchant || (g.cat ? catName(g.cat) : 'Spending') : (GTYPES.find((t) => t[0] === g.type) || [, ''])[1];
   if (g.type === 'balance') return an || 'Money you have';
   return an && g.type !== 'networth' ? base + ' · ' + an : base;
 }
@@ -745,7 +775,7 @@ function openGraphEditor(orig, preset) {
     if (f.type === 'spend') {
       const tot = {}; for (const t of spending()) if (t.amount > 0) { tot['c' + t.category] = (tot['c' + t.category] || 0) + t.amount; tot['m' + t.name] = (tot['m' + t.name] || 0) + t.amount; }
       const top = (p) => Object.keys(tot).filter((k) => k[0] === p).sort((a, b) => tot[b] - tot[a]).map((k) => k.slice(1));
-      el.append(h('div', { class: 'card' }, pick('Category', 'cat', top('c').map((c) => [c, nice(c)])), pick('Merchant', 'merchant', top('m').slice(0, 60).map((m) => [m, m]))));
+      el.append(h('div', { class: 'card' }, pick('Category', 'cat', top('c').map((c) => [c, catName(c)])), pick('Merchant', 'merchant', top('m').slice(0, 60).map((m) => [m, m]))));
     }
     if (f.type !== 'networth') {
       const accs = everyAccount().filter((a) => (f.type === 'balance' ? true : f.type === 'income' ? !isDebt(a) : true));
