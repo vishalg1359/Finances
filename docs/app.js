@@ -1,7 +1,7 @@
 'use strict';
 // Finances: talks only to the password-protected Worker; Plaid keys never reach the phone.
 
-const DEFAULT_SERVER = '';
+const DEFAULT_SERVER = 'https://finances.vishalg.workers.dev';
 const store = {
   get: (k, d) => { try { const v = localStorage.getItem('fin.' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
   set: (k, v) => { try { localStorage.setItem('fin.' + k, JSON.stringify(v)); } catch (_) {} },
