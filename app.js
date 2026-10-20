@@ -276,6 +276,8 @@ function setGlow(dir) { document.body.style.setProperty('--glow', dir > 0 ? 'rgb
 
 // ---------- shared pieces ----------
 const TITLES = { overview: 'Overview', categories: 'Categories', merchants: 'Merchants', paidwith: 'Paid with', cashflow: 'Cash flow' };
+let mainIds = store.get('main', null);
+const isMain = (a) => (mainIds ? mainIds.includes(a.account_id) : a.subtype === 'checking');
 const isDebt = (a) => a.type === 'credit' || a.type === 'loan';
 const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const shortDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -324,8 +326,9 @@ function viewOverview(el) {
     full.length > 2 ? h('div', { class: 'periods' }, PERIODS.map(([label, n]) => h('button', { class: 'period' + (n === histDays ? ' on' : ''),
       onclick: () => { histDays = n; store.set('histDays', n); render(); } }, label))) : null));
   el.append(h('div', { class: 'tiles' },
-    h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }), 'Checking'),
-      num('tile-num', 'chk' + conn, sum(have.filter((a) => a.subtype === 'checking')))),
+    h('div', { class: 'tile tap', onclick: () => openPanel('settings') }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }),
+        have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main'),
+      num('tile-num', 'chk' + conn, sum(have.filter(isMain)))),
     h('div', { class: 'tile' }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
       num('tile-num', 'owe' + conn, oweTotal))));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
@@ -343,9 +346,14 @@ function viewOverview(el) {
       h('div', { class: 'amt' + (debt ? ' neg' : '') }, money(a.balances.current || 0, true)), pend.length ? h('span', { class: 'chev' }, '›') : null),
       isOpen ? h('div', { class: 'drill' }, pend.map(txnRow)) : null];
   };
-  const groups = [['Checking', (a) => a.subtype === 'checking'], ['Savings', (a) => a.subtype === 'savings'],
+  // Vaults (e.g. SoFi) come through as "cash management" accounts next to an empty parent savings account.
+  const vaultBanks = new Set(accs.filter((a) => a.subtype === 'savings').map((a) => a.institution));
+  const isVault = (a) => a.subtype === 'cash management' && vaultBanks.has(a.institution);
+  const hasVaults = new Set(accs.filter(isVault).map((a) => a.institution));
+  const emptyParent = (a) => a.subtype === 'savings' && hasVaults.has(a.institution) && !a.balances.current;
+  const groups = [['Checking', (a) => a.subtype === 'checking'], ['Savings', (a) => (a.subtype === 'savings' && !emptyParent(a)) || isVault(a)],
     ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage'], ['Credit cards', (a) => a.type === 'credit'], ['Loans', (a) => a.type === 'loan'],
-    ['Other', (a) => !['checking', 'savings'].includes(a.subtype) && !['investment', 'brokerage', 'credit', 'loan'].includes(a.type)]];
+    ['Other', (a) => !isVault(a) && !['checking', 'savings'].includes(a.subtype) && !['investment', 'brokerage', 'credit', 'loan'].includes(a.type)]];
   const card = h('div', { class: 'card accounts' });
   for (const [label, test] of groups) {
     const list = accs.filter(test);
@@ -544,6 +552,15 @@ function viewSettings(el) {
         busy('Removing…');
         try { gotData(await api('/remove', { item_id: c.item_id })); renderPanel(); } catch (e) { toast(e.message); } finally { busy(null); }
       } }, 'Remove')))));
+  const cash = conns.flatMap((c) => (c.accounts || []).filter((a) => !isDebt(a)).map((a) => ({ ...a, institution: c.institution })));
+  if (cash.length) el.append(h('div', { class: 'card' }, h('h2', {}, 'Main accounts', h('span', {}, 'top of Overview')), cash.map((a) =>
+    h('label', { class: 'row tap' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, a.name, h('span', { class: 'mask' }, ' ' + (a.mask || ''))),
+      h('div', { class: 'sub' }, a.institution || '')),
+      h('input', { type: 'checkbox', class: 'switch', checked: isMain(a), onchange: (e) => {
+        const ids = new Set(cash.filter(isMain).map((x) => x.account_id));
+        e.target.checked ? ids.add(a.account_id) : ids.delete(a.account_id);
+        mainIds = [...ids]; store.set('main', mainIds); render();
+      } })))));
   el.append(h('button', { class: 'btn', onclick: () => openPanel('loans') }, 'Loans (Aidvantage) ›'));
   el.append(h('p', { class: 'muted', style: 'font-size:13px' }, 'Pulls the latest every time you open the app. Banks themselves update about 1–4 times a day.'));
   el.append(h('button', { class: 'btn danger', onclick: () => { closePanel(true); logout(); } }, 'Lock'));
