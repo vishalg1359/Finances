@@ -152,7 +152,7 @@ function payoff(balance, rate, payment) {
 
 // ---------- charts ----------
 function lineChart(points) {
-  if (points.length < 2) return h('p', { class: 'muted' }, 'The trend line fills in as the app syncs each day.');
+  if (points.length < 2) return null;
   const W = 320, H = 110, vals = points.map((p) => p.v), lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
   const xy = points.map((p, i) => [(i / (points.length - 1)) * W, H - 8 - ((p.v - lo) / span) * (H - 16)]);
   const d = xy.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
@@ -302,7 +302,6 @@ function viewLoans() {
 function viewSettings() {
   const el = $('view-settings'); el.replaceChildren();
   el.append(h('button', { class: 'btn primary', onclick: () => connect() }, '+ Connect an account'));
-  if (data && data.env === 'sandbox') el.append(h('p', { class: 'warn' }, 'Test mode: using Plaid Sandbox. Log in with user_good / pass_good.'));
   const conns = data ? data.connections : [];
   if (conns.length) el.append(h('div', { class: 'card' }, h('h2', {}, `Connections · ${conns.length} of 10`), conns.map((c) =>
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, c.institution || 'Bank'),
