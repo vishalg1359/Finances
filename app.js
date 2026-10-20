@@ -371,7 +371,6 @@ function viewOverview(el) {
 }
 
 // ---------- date range (spending tabs) ----------
-let customOpen = false;
 const thisMonthRange = () => ({ from: todayISO().slice(0, 8) + '01', to: todayISO() });
 function rangePresets() {
   const t = todayISO(), d = new Date(t + 'T12:00');
@@ -386,14 +385,12 @@ const presetOf = (r) => rangePresets().find(([, x]) => x.from === r.from && x.to
 const rangeLabel = (r) => { const p = presetOf(r); return p ? p[0] : fmtShort(r.from) + ' – ' + fmtShort(r.to); };
 function rangeBar(rerender) {
   const set = (r) => { if (r.from > r.to) r = { from: r.to, to: r.from }; range = r; open.clear(); rerender(); };
-  const custom = customOpen || !presetOf(range);
   const date = (key) => h('label', { class: 'dfield' }, h('span', {}, key === 'from' ? 'From' : 'To'),
     h('input', { type: 'date', value: range[key], max: todayISO(), onchange: (e) => e.target.value && set({ ...range, [key]: e.target.value }) }));
   return h('div', { class: 'rangebar' },
     h('div', { class: 'presets' }, rangePresets().map(([label, r]) =>
-      h('button', { class: 'chip' + (!custom && r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => { customOpen = false; set(r); } }, label)),
-      h('button', { class: 'chip' + (custom ? ' on' : ''), onclick: () => { customOpen = !customOpen; rerender(); } }, custom && !customOpen ? rangeLabel(range) : 'Custom')),
-    customOpen ? h('div', { class: 'range' }, date('from'), date('to')) : null);
+      h('button', { class: 'chip' + (r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => set(r) }, label))),
+    h('div', { class: 'range' }, date('from'), date('to')));
 }
 
 // ---------- Breakdowns (categories / merchants / paid with) ----------
