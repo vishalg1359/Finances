@@ -981,13 +981,16 @@ function showView(name) {
   if (name === view) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
   view = name; month = null; open.clear(); setTab(); window.scrollTo(0, 0); render('fade');
 }
-// Swipe sideways on the page to move between connections.
+// Long swipe that starts at the screen edge moves between connections.
 let touch = null;
-$('view').addEventListener('touchstart', (e) => { touch = e.target.closest('svg, .chips, .agrid-wrap.editing, .editing') ? null : { x: e.touches[0].clientX, y: e.touches[0].clientY }; }, { passive: true });
+$('view').addEventListener('touchstart', (e) => {
+  const x = e.touches[0].clientX, edge = x < 24 ? 'l' : x > innerWidth - 24 ? 'r' : null;
+  touch = !edge || e.target.closest('.agrid-wrap.editing, .editing') ? null : { x, y: e.touches[0].clientY, edge };
+}, { passive: true });
 $('view').addEventListener('touchend', (e) => {
   if (!touch || !data || data.connections.length < 2) return;
-  const dx = e.changedTouches[0].clientX - touch.x, dy = e.changedTouches[0].clientY - touch.y; touch = null;
-  if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+  const touch0 = touch, dx = e.changedTouches[0].clientX - touch.x, dy = e.changedTouches[0].clientY - touch.y; touch = null;
+  if (Math.abs(dx) < innerWidth * 0.4 || Math.abs(dx) < Math.abs(dy) * 1.5 || (touch0.edge === 'l') !== dx > 0) return;
   const ids = ['all'].concat(data.connections.map((c) => c.item_id)), i = ids.indexOf(conn) + (dx < 0 ? 1 : -1);
   if (i >= 0 && i < ids.length) pickConn(ids[i], dx < 0 ? 'l' : 'r');
 }, { passive: true });
@@ -1043,7 +1046,7 @@ if ('serviceWorker' in navigator) {
   }, { passive: false });
   const end = () => {
     if (!sw || !sw.on) { sw = null; return; }
-    const fast = sw.dx / Math.max(1, Date.now() - sw.t) > 0.5, go = sw.dx > innerWidth * 0.33 || (fast && sw.dx > 40);
+    const go = sw.dx > innerWidth * 0.4;
     P.style.transition = 'transform .2s cubic-bezier(.2,.8,.2,1)'; P.style.transform = go ? 'translateX(100%)' : '';
     sw = null;
     setTimeout(() => { if (!go) return reset(); if (panel === 'loans') { reset(); openPanel('settings'); } else { closePanel(true); reset(); } }, 200);
