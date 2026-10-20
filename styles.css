@@ -323,8 +323,8 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 @keyframes fadein { from { opacity: 0; } }
 .card.graph .big { font-size: 26px; margin: 4px 0 2px; }
 .big .unit { font-size: 15px; font-weight: 600; color: var(--dim); margin-left: 2px; letter-spacing: 0; }
-.dbox { position: relative; min-width: 0; }
-.dbox.today input { color: transparent; }
-.dbox .dtoday { position: absolute; left: 0; top: 50%; transform: translateY(-50%); pointer-events: none; font-size: 15px; font-weight: 600; color: var(--fg); }
-.gdates .dbox .dtoday { left: 11px; }
-.dfield .dbox .dtoday { text-transform: none; letter-spacing: 0; font-size: 15px; font-weight: 600; color: var(--fg); }
+.dend { text-align: left; font: inherit; color: inherit; }
+.dend b { font-size: 15px; font-weight: 600; min-height: 22px; line-height: 22px; }
+.dend-g { width: 100%; text-align: left; border: 1px solid var(--line); border-radius: 14px; padding: 10px; margin: 6px 0; background: var(--card); font-size: 15px; color: var(--fg); }
+.pk-cat .field { margin: 8px 0 0; }
+.pk-cat .field input { color-scheme: dark; }
