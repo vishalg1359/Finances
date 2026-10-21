@@ -421,18 +421,11 @@ function viewOverview(el) {
   const heroNum = num('hero-num', 'net' + conn, net, true);
   const change = h('div', { class: 'change' });
   const showChange = () => {
-    change.className = 'change ' + (delta == null ? 'muted' : delta >= 0 ? 'pos' : 'neg');
-    change.textContent = delta == null ? (conn === 'all' ? 'Net worth' : (shownConns()[0] || {}).institution || '') :
-      `${delta >= 0 ? '▲' : '▼'} ${money(Math.abs(delta), true)} · ${PERIODS.find((p) => p[1] === histDays)[0]}`;
+    change.className = 'change muted';
+    change.textContent = conn === 'all' ? 'Net worth' : (shownConns()[0] || {}).institution || '';
   };
   showChange();
-  const chart = lineChart(hist, (p) => {
-    if (p) { paint(heroNum, p.v, true); change.className = 'change muted'; change.textContent = dayName(p.date); }
-    else { paint(heroNum, net, true); showChange(); }
-  });
-  el.append(h('section', { class: 'hero-block' }, heroNum, change, chart,
-    full.length > 2 ? h('div', { class: 'periods' }, PERIODS.map(([label, n]) => h('button', { class: 'period' + (n === histDays ? ' on' : ''),
-      onclick: () => { histDays = n; store.set('histDays', n); render(); } }, label))) : null));
+  el.append(h('section', { class: 'hero-block' }, heroNum, change));
   const pendingFor = (a) => allTxns().filter((t) => t.pending && t.account_id === a.account_id).sort((x, y) => (x.date < y.date ? 1 : -1));
   const pendSum = (a) => pendingFor(a).reduce((s, t) => s + t.amount, 0);
   const owePend = owe.filter((a) => a.type === 'credit').reduce((s, a) => s + pendSum(a), 0);
