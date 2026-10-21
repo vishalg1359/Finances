@@ -17,7 +17,8 @@ const store = {
 let data = store.get('data', null);
 let loans = store.get('loans', []);
 let view = 'overview';
-let conn = store.get('conn', 'all');
+const connBy = store.get('connBy', {});
+let conn = connBy[view] || 'all';
 let month = null;
 let open = new Set();
 let range = null;
@@ -86,7 +87,8 @@ async function pullSettings() {
 }
 function gotData(d) {
   data = d; store.set('data', d);
-  if (conn !== 'all' && !d.connections.some((c) => c.item_id === conn)) conn = 'all';
+  for (const k in connBy) if (connBy[k] !== 'all' && !d.connections.some((c) => c.item_id === connBy[k])) delete connBy[k];
+  conn = connBy[view] || 'all';
   render(); pollIfLoading();
 }
 async function refresh(manual) {
@@ -124,7 +126,7 @@ function openLink(token, received) {
       busy('Adding ' + bank + '…');
       try {
         const d = await api('/exchange', { public_token, institution: meta.institution && meta.institution.name });
-        closePanel(true); conn = d.added_item || 'all'; store.set('conn', conn); view = 'overview';
+        closePanel(true); view = 'overview'; conn = connBy.overview = d.added_item || 'all'; store.set('connBy', connBy);
         gotData(d); setTab(); toast(bank + ' connected');
       } catch (e) { toast(e.message); }
       finally { busy(null); }
@@ -604,17 +606,6 @@ function rangeBar(rerender) {
     h('div', { class: 'range' }, date('from'), date('to')));
 }
 // Spending tabs can switch to the charges behind what's owed on cards now (same list as the You owe tile).
-function modeBar(rerender) {
-  const go = (owed, pending = !!range.pending, split = false) => { range = { ...range, owed, pending, split }; open.clear(); rerender(); };
-  return h('div', { class: 'modebar' },
-    range.owed ? h('div', { class: 'seg small' },
-      h('button', { class: !range.pending ? 'on' : '', onclick: () => go(true, false) }, 'Posted'),
-      h('button', { class: range.pending ? 'on' : '', onclick: () => go(true, true) }, '+ Pending')) : h('div', { class: 'grow' }),
-    h('div', { class: 'seg small' },
-      h('button', { class: !range.owed && !range.split ? 'on' : '', onclick: () => go(false) }, 'Spending'),
-      h('button', { class: range.owed ? 'on owe' : '', onclick: () => go(true) }, 'Owed on cards'),
-      h('button', { class: !range.owed && range.split ? 'on' : '', onclick: () => go(false, !!range.pending, true) }, 'Paid + unpaid')));
-}
 
 // Charges behind each card's current balance: newest posted charges and refunds until they add up to what's owed.
 const CARD_PAYMENT = new Set(['LOAN_PAYMENTS', 'TRANSFER_IN']);
@@ -635,23 +626,36 @@ function owedTxns(withPending) {
 // Paid + unpaid: spending in the range plus pending, each tagged paid / unpaid / pending (non-card charges count as paid).
 const txKey = (t) => t.transaction_id || t.id || [t.account_id, t.date, t.name, t.amount].join('|');
 const cardIds = () => new Set(allAccounts().filter((a) => a.type === 'credit').map((a) => a.account_id));
-function statusTxns(r) {
-  const cards = cardIds(), unpaid = new Map(owedTxns(false).map((t) => [txKey(t), t.amount]));
-  const inR = (t) => t.date >= r.from && t.date <= r.to;
-  const posted = spending().filter(inR).map((t) => {
-    const u = cards.has(t.account_id) ? unpaid.get(txKey(t)) : null;
-    return { ...t, unpaid: u || 0, stmt: t.amount <= 0 ? '' : u == null ? 'paid' : Math.abs(u - t.amount) < 0.005 ? 'unpaid' : 'partly paid' };
-  });
-  return [...allTxns().filter((t) => t.pending && inR(t) && !NOT_SPENDING.has(t.category)).map((t) => ({ ...t, stmt: 'pending' })), ...posted];
+const showOf = () => range.show || { paid: true, unpaid: true, pending: false };
+function toggleBar(rerender) {
+  const s = showOf();
+  const flip = (k) => { const n = { ...s, [k]: !s[k] }; if (!n.paid && !n.unpaid && !n.pending) return; range = { ...range, show: n }; open.clear(); rerender(); };
+  return h('div', { class: 'modebar' }, h('div', { class: 'seg small toggles' },
+    [['paid', 'Paid'], ['unpaid', 'Unpaid'], ['pending', 'Pending']].map(([k, l]) => h('button', { class: s[k] ? 'on ' + k : '', onclick: () => flip(k) }, l))));
 }
-function statusSplit(list) {
-  const pend = list.filter((t) => t.pending).reduce((s, t) => s + t.amount, 0);
-  const unpaid = list.filter((t) => !t.pending).reduce((s, t) => s + t.unpaid, 0);
-  const paid = list.filter((t) => !t.pending).reduce((s, t) => s + t.amount, 0) - unpaid;
-  const part = (cls, v, label) => h('div', {}, h('span', { class: 'sw ' + cls }), h('div', {}, h('b', {}, money(v, true)), h('small', {}, label)));
+// Paid and unpaid parts of posted spending in the range, plus pending. Without Paid it's exactly what's owed on cards, any date.
+function shownTxns(s, r) {
+  const cards = cardIds(), dated = s.paid, out = [];
+  const inR = (t) => !dated || (t.date >= r.from && t.date <= r.to);
+  if (s.paid || s.unpaid) {
+    const unpaid = new Map(owedTxns(false).map((t) => [txKey(t), t.amount]));
+    for (const t of dated ? spending().filter(inR) : owedTxns(false)) {
+      const u = !dated ? t.amount : cards.has(t.account_id) ? unpaid.get(txKey(t)) || 0 : 0;
+      const paidPart = s.paid ? t.amount - u : 0, unpaidPart = s.unpaid ? u : 0;
+      if (Math.abs(paidPart + unpaidPart) < 0.005) continue;
+      const stmt = !dated || !cards.has(t.account_id) || t.amount <= 0 ? '' : Math.abs(u) < 0.005 ? 'paid' : Math.abs(u - t.amount) < 0.005 ? 'unpaid' : 'partly paid';
+      out.push({ ...t, amount: Math.round((paidPart + unpaidPart) * 100) / 100, paidPart, unpaidPart, stmt });
+    }
+  }
+  if (s.pending) out.push(...(dated ? allTxns().filter((t) => t.pending && inR(t) && !NOT_SPENDING.has(t.category)) : owedTxns(true).filter((t) => t.pending)).map((t) => ({ ...t, stmt: 'pending' })));
+  return out;
+}
+function statusSplit(list, s) {
+  const sum = (f) => list.reduce((n, t) => n + f(t), 0);
+  const parts = [['paid', 'paid', 'Paid', sum((t) => t.paidPart || 0)], ['unpaid', 'posted', 'Unpaid', sum((t) => t.unpaidPart || 0)], ['pending', 'pending', 'Pending', sum((t) => (t.pending ? t.amount : 0))]].filter((p) => s[p[0]]);
   return h('div', { class: 'split stmt-split' },
-    h('div', { class: 'splitbar' }, h('i', { class: 'paid', style: `flex:${Math.max(paid, 0.01)}` }), h('i', { class: 'posted', style: `flex:${Math.max(unpaid, 0.01)}` }), h('i', { class: 'pending', style: `flex:${Math.max(pend, 0.01)}` })),
-    h('div', { class: 'splitlegend' }, part('paid', paid, 'Paid'), part('posted', unpaid, 'Unpaid'), part('pending', pend, 'Pending')));
+    h('div', { class: 'splitbar' }, parts.map(([, cls, , v]) => h('i', { class: cls, style: `flex:${Math.max(v, 0.01)}` }))),
+    h('div', { class: 'splitlegend' }, parts.map(([, cls, label, v]) => h('div', {}, h('span', { class: 'sw ' + cls }), h('div', {}, h('b', {}, money(v, true)), h('small', {}, label))))));
 }
 
 // ---------- Breakdowns (categories / merchants / paid with) ----------
@@ -660,15 +664,16 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
   { const lb = loadingBanner(); if (lb) el.append(lb); }
   range = range || { ...thisMonthRange(), live: true };
   if (range.live && range.to !== todayISO()) range = { ...range, to: todayISO() };
-  const stmt = range.split && !range.owed;
+  const s = showOf(), plain = s.paid && s.unpaid && !s.pending, on = ['paid', 'unpaid', 'pending'].filter((k) => s[k]).length;
+  const heading = [s.paid && s.unpaid ? 'Spent' : s.paid ? 'Paid' : s.unpaid ? 'Owed' : '', s.pending ? 'pending' : ''].filter(Boolean).join(' + ').replace(/^./, (c) => c.toUpperCase());
   const list = spending(), inR = (t, r) => t.date >= r.from && t.date <= r.to;
-  const inRange = range.owed ? owedTxns(range.pending) : stmt ? statusTxns(range) : list.filter((t) => inR(t, range)), total = inRange.reduce((s, t) => s + t.amount, 0);
+  const inRange = shownTxns(s, range), total = inRange.reduce((s, t) => s + t.amount, 0);
   const days = daysBetween(range.from, range.to) + 1;
-  const prevTotal = range.owed || stmt ? 0 : list.filter((t) => inR(t, { from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) })).reduce((s, t) => s + t.amount, 0);
+  const prevTotal = !plain ? 0 : list.filter((t) => inR(t, { from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) })).reduce((s, t) => s + t.amount, 0);
   const diff = prevTotal ? ((total - prevTotal) / prevTotal) * 100 : null;
   setGlow(diff == null ? 0 : -diff);
-  el.append(modeBar(render));
-  if (!range.owed) el.append(rangeBar(render));
+  el.append(toggleBar(render));
+  if (s.paid) el.append(rangeBar(render));
   const groups = {};
   for (const t of inRange) (groups[keyOf(t)] = groups[keyOf(t)] || []).push(t);
   const sorted = Object.entries(groups).map(([k, l]) => ({ k, l, v: l.reduce((s, t) => s + t.amount, 0) })).filter((g) => Math.abs(g.v) > 0.005).sort((a, b) => b.v - a.v);
@@ -678,13 +683,13 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
     const top = sorted.slice(0, 7), rest = sorted.slice(7);
     const segs = top.map((g) => ({ v: g.v, color: g.color, on: open.has(g.k) }));
     if (rest.length) segs.push({ v: rest.reduce((s, g) => s + g.v, 0), color: PALETTE[8] });
-    el.append(h('div', { class: 'card hero-card' }, donut(segs, [h('div', { class: 'label' }, range.owed ? (range.pending ? 'Owed + pending' : 'Owed') : stmt ? 'Spent + pending' : 'Spent'), num('donut-num', 'tot' + view + conn, total), diffEl],
+    el.append(h('div', { class: 'card hero-card' }, donut(segs, [h('div', { class: 'label' }, heading), num('donut-num', 'tot' + view + conn, total), diffEl],
       (i) => top[i] && toggle(top[i].k))));
   } else {
-    el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, range.owed ? (range.pending ? 'Owed + pending' : 'Owed') : stmt ? 'Spent + pending' : 'Spent'), num('hero-num', 'tot' + view + conn, total, true), diffEl));
+    el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, heading), num('hero-num', 'tot' + view + conn, total, true), diffEl));
   }
-  if (stmt) el.append(h('div', { class: 'card stmt-card' }, statusSplit(inRange)));
-  if (!sorted.length) { el.append(h('div', { class: 'empty small' }, range.owed ? 'Nothing owed on your cards' : 'Nothing spent in this range')); return; }
+  if (on > 1) el.append(h('div', { class: 'card stmt-card' }, statusSplit(inRange, s)));
+  if (!sorted.length) { el.append(h('div', { class: 'empty small' }, s.paid ? 'Nothing spent in this range' : 'Nothing owed on your cards')); return; }
   const max = sorted[0].v || 1;
   if (layout === 'cards') {
     const grid = h('div', { class: 'cardgrid' });
@@ -1082,7 +1087,7 @@ function pickConn(id, dir) {
   if (id === conn) return;
   const ids = ['all'].concat((data ? data.connections : []).map((c) => c.item_id));
   dir = dir || (ids.indexOf(id) > ids.indexOf(conn) ? 'l' : 'r');
-  conn = id; store.set('conn', id); open.clear(); render('slide-' + dir);
+  conn = connBy[view] = id; store.set('connBy', connBy); open.clear(); render('slide-' + dir);
 }
 function render(anim) {
   renderChips();
@@ -1112,7 +1117,7 @@ function nudgeViewport() {
 function setTab() { for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.view === view); }
 function showView(name) {
   if (name === view) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-  view = name; month = null; open.clear(); setTab(); window.scrollTo(0, 0); render('fade');
+  view = name; conn = connBy[name] || 'all'; month = null; open.clear(); setTab(); window.scrollTo(0, 0); render('fade');
 }
 // Long swipe that starts at the screen edge moves between connections.
 let touch = null;
@@ -1131,7 +1136,7 @@ $('view').addEventListener('touchend', (e) => {
 // ---------- login ----------
 function logout() { store.del('pass'); store.del('data'); data = null; showLogin(); }
 function showLogin() { $('main').hidden = true; $('tabbar').hidden = true; $('login').hidden = false; $('login-url').value = store.get('server', DEFAULT_SERVER); }
-function showApp() { $('login').hidden = true; $('main').hidden = false; $('tabbar').hidden = false; view = 'overview'; setTab(); render('fade'); nudgeViewport(); }
+function showApp() { $('login').hidden = true; $('main').hidden = false; $('tabbar').hidden = false; view = 'overview'; conn = connBy.overview || 'all'; setTab(); render('fade'); nudgeViewport(); }
 $('login-btn').addEventListener('click', async () => {
   store.set('server', $('login-url').value.trim()); store.set('pass', $('login-pass').value);
   $('login-err').textContent = '';
