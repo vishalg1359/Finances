@@ -150,7 +150,31 @@ async function connect(item_id) {
 // ---------- derived data ----------
 const shownConns = () => (data ? data.connections.filter((c) => conn === 'all' || c.item_id === conn) : []);
 const allAccounts = () => shownConns().flatMap((c) => (c.accounts || []).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
-const NOT_SPENDING = new Set(['INCOME', 'TRANSFER_IN', 'TRANSFER_OUT', 'LOAN_PAYMENTS']);
+// Transfers out and loan payments count as spending unless the money stays yours (another connected account, savings, investing).
+const SPEND_OUT = new Set(['TRANSFER_OUT', 'LOAN_PAYMENTS']);
+const OWN_DETAIL = new Set(['TRANSFER_OUT_SAVINGS', 'TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS']);
+let ownCache = null;
+// Both sides of moves between connected accounts, plus a bank's funding leg of a payment (e.g. Venmo, Zelle) that shows on another connection.
+function ownMoves() {
+  const all = allTxns();
+  if (ownCache && ownCache.src === all) return ownCache.ids;
+  const ids = new Set(), connOf = {}, gap = (a, b) => Math.abs(new Date(a) - new Date(b)) / 864e5;
+  for (const c of data.connections) for (const a of c.accounts || []) connOf[a.account_id] = c.item_id;
+  const insts = data.connections.map((c) => ({ id: c.item_id, key: (c.institution || '').toLowerCase().split(' - ')[0].trim() })).filter((c) => c.key.length > 2);
+  const outs = all.filter((t) => t.amount > 0 && SPEND_OUT.has(t.category)).sort((a, b) => (a.date < b.date ? -1 : 1));
+  for (const t of outs) {
+    if (ids.has(t.id)) continue;
+    const m = all.filter((x) => !ids.has(x.id) && x.account_id !== t.account_id && Math.abs(x.amount + t.amount) < 0.01 && gap(x.date, t.date) <= 5)
+      .sort((x, y) => gap(x.date, t.date) - gap(y.date, t.date))[0];
+    if (m) { ids.add(t.id); ids.add(m.id); continue; }
+    const text = (t.name + ' ' + (t.raw || '')).toLowerCase(), to = insts.find((c) => c.id !== connOf[t.account_id] && text.includes(c.key));
+    if (to && outs.some((x) => connOf[x.account_id] === to.id && Math.abs(x.amount - t.amount) < 0.01 && gap(x.date, t.date) <= 5)) ids.add(t.id);
+  }
+  ownCache = { src: all, ids };
+  return ids;
+}
+const isSpend = (t) => t.category !== 'INCOME' && t.category !== 'TRANSFER_IN' &&
+  (!SPEND_OUT.has(t.category) || (t.amount > 0 && !(!t.origCategory && OWN_DETAIL.has(t.detail)) && !ownMoves().has(t.id)));
 let cats = store.get('cats', { tx: {}, rules: {} }), catsCache = null;
 const allTxns = () => {
   if (!data) return [];
@@ -165,7 +189,7 @@ let spendCache = { key: null, list: [] };
 function spending() {
   const all = txns(), key = (data && data.synced) + '|' + conn + '|' + all.length;
   if (spendCache.key === key && spendCache.cats === cats) return spendCache.list;
-  const list = all.filter((t) => !t.pending && !NOT_SPENDING.has(t.category) && t.category !== 'INCOME');
+  const list = all.filter((t) => !t.pending && isSpend(t));
   const charges = list.filter((t) => t.amount > 0), refunds = list.filter((t) => t.amount < 0), drop = new Set();
   const names = new Set(charges.map((t) => t.name));
   for (const r of refunds.sort((a, b) => (a.date < b.date ? -1 : 1))) {
@@ -360,7 +384,7 @@ const isDebt = (a) => a.type === 'credit' || a.type === 'loan';
 const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const shortDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const txnRow = (t) => h('div', { class: 'row tap', onclick: (e) => { e.stopPropagation(); pickCategory(t); } }, logo(t), h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name),
-  h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + catName(t.category) + (t.pending ? ' · pending' : '') + (t.amount < 0 && t.category !== 'INCOME' && !NOT_SPENDING.has(t.category) ? ' · refund' : ''),
+  h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + catName(t.category) + (t.pending ? ' · pending' : '') + (t.amount < 0 && isSpend(t) ? ' · refund' : ''),
     t.stmt && t.stmt !== 'pending' ? h('span', { class: 'stag ' + t.stmt.split(' ')[0] }, ' · ' + t.stmt) : null)),
   h('div', { class: 'amt ' + (t.amount < 0 ? 'pos' : 'neg') }, (t.amount < 0 ? '+' : '−') + money(Math.abs(t.amount), true)));
 const CAT_LIST = ['FOOD_AND_DRINK', 'RENT_AND_UTILITIES', 'GENERAL_MERCHANDISE', 'TRANSPORTATION', 'TRAVEL', 'ENTERTAINMENT', 'PERSONAL_CARE', 'MEDICAL', 'GENERAL_SERVICES', 'HOME_IMPROVEMENT', 'GOVERNMENT_AND_NON_PROFIT', 'BANK_FEES', 'OTHER', 'LOAN_PAYMENTS', 'INCOME', 'TRANSFER_OUT', 'TRANSFER_IN'];
@@ -380,7 +404,7 @@ function pickCategory(t) {
     h('div', { class: 'pk-scope' }, h('button', { class: 'chip' + (!all ? ' on' : ''), onclick: () => { all = false; draw(); } }, 'Just this one'),
       h('button', { class: 'chip' + (all ? ' on' : ''), onclick: () => { all = true; draw(); } }, 'All from ' + t.name)),
     h('div', { class: 'pk-list' }, CAT_LIST.map((c) => h('button', { class: 'pk-cat' + (c === t.category ? ' on' : ''), onclick: () => apply(c) },
-      catName(c), c === orig ? h('span', { class: 'muted' }, ' · bank\'s pick') : null, c.startsWith('TRANSFER') || c === 'INCOME' || c === 'LOAN_PAYMENTS' ? h('span', { class: 'muted' }, ' · not spending') : null))),
+      catName(c), c === orig ? h('span', { class: 'muted' }, ' · bank\'s pick') : null, c === 'TRANSFER_IN' || c === 'INCOME' ? h('span', { class: 'muted' }, ' · not spending') : SPEND_OUT.has(c) ? h('span', { class: 'muted' }, ' · spending unless it goes to your own account') : null))),
   ];
   const card = h('div', { class: 'pk-card' }), draw = () => card.replaceChildren(...body());
   const ov = h('div', { class: 'picker', onclick: (e) => { if (e.target === ov) close(); } }, card);
@@ -584,7 +608,7 @@ const thisMonthRange = () => ({ from: todayISO().slice(0, 8) + '01', to: todayIS
 function rangePresets() {
   const t = todayISO(), d = new Date(t + 'T12:00');
   const lastStart = isoOf(new Date(d.getFullYear(), d.getMonth() - 1, 1)), lastEnd = isoOf(new Date(d.getFullYear(), d.getMonth(), 0));
-  const first = allTxns().reduce((m, x) => (x.date < m ? x.date : m), t);
+  const first = txns().reduce((m, x) => (x.date < m ? x.date : m), t);
   return [['This month', thisMonthRange()], ['Last month', { from: lastStart, to: lastEnd }],
     ['30D', { from: shiftDays(t, -29), to: t }], ['3M', { from: shiftDays(t, -89), to: t }],
     ['YTD', { from: t.slice(0, 4) + '-01-01', to: t }], ['All', { from: first, to: t }]];
@@ -659,7 +683,7 @@ function shownTxns(s, r) {
       out.push({ ...t, amount: Math.round((paidPart + unpaidPart) * 100) / 100, paidPart, unpaidPart, stmt });
     }
   }
-  if (s.pending) out.push(...(dated ? allTxns().filter((t) => t.pending && inR(t) && !NOT_SPENDING.has(t.category)) : owedTxns(true).filter((t) => t.pending)).map((t) => ({ ...t, stmt: 'pending' })));
+  if (s.pending) out.push(...(s.unpaid && !s.paid ? owedTxns(true).filter((t) => t.pending) : txns().filter((t) => t.pending && isSpend(t) && inR(t))).map((t) => ({ ...t, stmt: 'pending' })));
   return out;
 }
 function statusSplit(list, s) {
@@ -701,7 +725,7 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
     el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, heading), num('hero-num', 'tot' + view + conn, total, true), diffEl));
   }
   if (on > 1) el.append(h('div', { class: 'card stmt-card' }, statusSplit(inRange, s)));
-  if (!sorted.length) { el.append(h('div', { class: 'empty small' }, s.paid ? 'Nothing spent in this range' : 'Nothing owed on your cards')); return; }
+  if (!sorted.length) { el.append(h('div', { class: 'empty small' }, s.paid ? 'Nothing spent in this range' : s.unpaid ? 'Nothing owed on your cards' : 'Nothing pending')); return; }
   const max = sorted[0].v || 1;
   if (layout === 'cards') {
     const grid = h('div', { class: 'cardgrid' });
