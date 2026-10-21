@@ -349,3 +349,27 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .modebar .grow { display: none; }
 .modebar > .seg.small:last-child { order: -1; flex: 1 1 100%; margin-left: 0; }
 .modebar > .seg.small:last-child button { flex: 1; padding: 7px 4px; }
+
+/* polish */
+.top { background: linear-gradient(var(--bg) 55%, color-mix(in srgb, var(--bg) 0%, transparent)); }
+.card, .tile, .atile, .seg.small, .rangebar .dfield, .dfield { background-image: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,0) 60%); box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+.card.graph.flat { background-image: none; box-shadow: none; }
+.label, .card h2, .gtitle, .tile .label, .atile-name, .splitlegend small, .sortbar > span { text-transform: uppercase; letter-spacing: .06em; font-size: 11.5px; font-weight: 700; }
+.atile-name { font-size: 11px; }
+.sechead h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+.hero-num { letter-spacing: -.035em; }
+.row .name { letter-spacing: -.005em; }
+.drill .row .sub { color: var(--muted); }
+.drill .amt.neg { color: var(--fg); }
+.presets { -webkit-mask-image: linear-gradient(90deg, #000 88%, transparent); mask-image: linear-gradient(90deg, #000 88%, transparent); }
+.seg.small button { transition: background .2s, color .2s; }
+.seg.small button.on { background: var(--card2); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.4), inset 0 0 0 1px var(--line); }
+.toggles button.on.paid { background: color-mix(in srgb, var(--good) 18%, var(--card)); color: var(--good); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--good) 35%, transparent); }
+.toggles button.on.unpaid { background: color-mix(in srgb, var(--bad) 18%, var(--card)); color: var(--bad); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bad) 35%, transparent); }
+.toggles button.on.pending { background: color-mix(in srgb, var(--pend) 18%, var(--card)); color: var(--pend); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pend) 35%, transparent); }
+.tab svg { padding: 3px 14px; width: 51px; height: 29px; border-radius: 999px; transition: background .2s; }
+.tab.active svg { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.tab { gap: 1px; padding-top: 6px; }
+.btn, .gbtn, .edit-btn, .chip { transition: transform .12s ease, background .2s, color .2s; }
+.btn:active, .gbtn:active, .edit-btn:active, .chip:active, .ibtn:active { transform: scale(.96); }
+.logo, .cat { border-radius: 11px; }
