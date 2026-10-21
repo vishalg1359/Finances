@@ -399,6 +399,18 @@ function loadingBanner() {
   const l = loadingConns().filter((c) => conn === 'all' || c.item_id === conn);
   return l.length ? h('div', { class: 'syncpill' }, h('div', { class: 'spinner' }), 'Syncing ' + l.map((c) => c.institution || 'bank').join(', ')) : null;
 }
+function whenText(iso) {
+  const d = new Date(iso), now = new Date(), t = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const day = (x) => x.toDateString(), y = new Date(now); y.setDate(now.getDate() - 1);
+  if (day(d) === day(now)) return t;
+  if (day(d) === day(y)) return 'yesterday ' + t;
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ', ' + t;
+}
+function updatedLine() {
+  const l = shownConns().filter((c) => c.updated);
+  if (!l.length) return null;
+  return h('div', { class: 'updated' }, l.map((c) => (l.length > 1 || conn === 'all' ? (c.institution || 'Bank') + ' updated ' : 'Updated ') + whenText(c.updated)).join(' · '));
+}
 function noData(el) {
   el.append(h('div', { class: 'empty' }, h('div', { class: 'empty-icon' }, '$'),
     h('button', { class: 'btn primary', onclick: () => connect() }, 'Connect an account')));
@@ -427,7 +439,7 @@ function viewOverview(el) {
     change.textContent = conn === 'all' ? 'Net worth' : (shownConns()[0] || {}).institution || '';
   };
   showChange();
-  el.append(h('section', { class: 'hero-block' }, heroNum, change));
+  el.append(h('section', { class: 'hero-block' }, heroNum, change, updatedLine()));
   const pendingFor = (a) => allTxns().filter((t) => t.pending && t.account_id === a.account_id).sort((x, y) => (x.date < y.date ? 1 : -1));
   const pendSum = (a) => pendingFor(a).reduce((s, t) => s + t.amount, 0);
   const owePend = owe.filter((a) => a.type === 'credit').reduce((s, a) => s + pendSum(a), 0);
@@ -1048,7 +1060,7 @@ function viewSettings(el) {
   const conns = data ? data.connections : [];
   if (conns.length) el.append(h('div', { class: 'card' }, h('h2', {}, `Connections · ${conns.length} of 10`), conns.map((c) =>
     h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, c.institution || 'Bank'),
-      h('div', { class: 'sub' }, (c.accounts || []).length + ' accounts'), c.error ? h('div', { class: 'warn' }, nice(c.error)) : null),
+      h('div', { class: 'sub' }, (c.accounts || []).length + ' accounts' + (c.updated ? ' · updated ' + whenText(c.updated) : '')), c.error ? h('div', { class: 'warn' }, nice(c.error)) : null),
       c.error ? h('button', { class: 'btn small', onclick: () => connect(c.item_id) }, 'Fix') : null,
       h('button', { class: 'btn small danger', onclick: async () => {
         if (!confirm(`Disconnect ${c.institution || 'this bank'}? This doesn’t free up one of your 10 Plaid slots.`)) return;

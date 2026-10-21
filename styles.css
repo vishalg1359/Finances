@@ -373,3 +373,4 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .btn, .gbtn, .edit-btn, .chip { transition: transform .12s ease, background .2s, color .2s; }
 .btn:active, .gbtn:active, .edit-btn:active, .chip:active, .ibtn:active { transform: scale(.96); }
 .logo, .cat { border-radius: 11px; }
+.hero-block .updated { margin-top: 6px; font-size: 12px; color: var(--muted); opacity: .8; }
