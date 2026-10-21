@@ -338,3 +338,10 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .pk-card { max-height: 72vh; transition: transform .15s; }
 .pk-grab { width: 40px; height: 5px; border-radius: 3px; background: var(--line); margin: -6px auto 10px; }
 .pk-head .gbtn { padding: 10px 20px; font-size: 15px; min-height: 44px; }
+
+.splitbar .paid, .sw.paid { background: var(--good, #1fd286); }
+.stmt-card { padding-top: 4px; padding-bottom: 4px; }
+.stag { font-weight: 600; }
+.stag.paid { color: var(--good, #1fd286); }
+.stag.unpaid { color: var(--bad); }
+.stag.partly { color: var(--pend); }

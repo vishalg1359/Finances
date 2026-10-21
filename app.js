@@ -358,7 +358,8 @@ const isDebt = (a) => a.type === 'credit' || a.type === 'loan';
 const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const shortDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const txnRow = (t) => h('div', { class: 'row tap', onclick: (e) => { e.stopPropagation(); pickCategory(t); } }, logo(t), h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name),
-  h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + catName(t.category) + (t.pending ? ' · pending' : '') + (t.amount < 0 && t.category !== 'INCOME' && !NOT_SPENDING.has(t.category) ? ' · refund' : ''))),
+  h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + catName(t.category) + (t.pending ? ' · pending' : '') + (t.amount < 0 && t.category !== 'INCOME' && !NOT_SPENDING.has(t.category) ? ' · refund' : ''),
+    t.stmt && t.stmt !== 'pending' ? h('span', { class: 'stag ' + t.stmt.split(' ')[0] }, ' · ' + t.stmt) : null)),
   h('div', { class: 'amt ' + (t.amount < 0 ? 'pos' : 'neg') }, (t.amount < 0 ? '+' : '−') + money(Math.abs(t.amount), true)));
 const CAT_LIST = ['FOOD_AND_DRINK', 'RENT_AND_UTILITIES', 'GENERAL_MERCHANDISE', 'TRANSPORTATION', 'TRAVEL', 'ENTERTAINMENT', 'PERSONAL_CARE', 'MEDICAL', 'GENERAL_SERVICES', 'HOME_IMPROVEMENT', 'GOVERNMENT_AND_NON_PROFIT', 'BANK_FEES', 'OTHER', 'LOAN_PAYMENTS', 'INCOME', 'TRANSFER_OUT', 'TRANSFER_IN'];
 const catName = (c) => ({ TRANSFER_OUT: 'Transfer out', TRANSFER_IN: 'Transfer in', RENT_AND_UTILITIES: 'Rent & utilities', FOOD_AND_DRINK: 'Food & drink', GOVERNMENT_AND_NON_PROFIT: 'Government & nonprofit' }[c] || nice(c));
@@ -577,7 +578,8 @@ function rangePresets() {
   const t = todayISO(), d = new Date(t + 'T12:00');
   const lastStart = isoOf(new Date(d.getFullYear(), d.getMonth() - 1, 1)), lastEnd = isoOf(new Date(d.getFullYear(), d.getMonth(), 0));
   const first = allTxns().reduce((m, x) => (x.date < m ? x.date : m), t);
-  return [['This month', thisMonthRange()], ['Last month', { from: lastStart, to: lastEnd }],
+  const st = statementRange();
+  return [['This month', thisMonthRange()], ['Last month', { from: lastStart, to: lastEnd }], ...(st ? [['Statement', st]] : []),
     ['30D', { from: shiftDays(t, -29), to: t }], ['3M', { from: shiftDays(t, -89), to: t }],
     ['YTD', { from: t.slice(0, 4) + '-01-01', to: t }], ['All', { from: first, to: t }]];
 }
@@ -599,14 +601,14 @@ function pickEnd(to, live, onPick) {
 }
 const endText = (to, live) => (live ? 'Now' : fullDay(to));
 function rangeBar(rerender) {
-  const set = (r, live = r.to === todayISO()) => { if (r.from > r.to) r = { from: r.to, to: r.from }; range = { from: r.from, to: r.to, live }; open.clear(); rerender(); };
+  const set = (r, live = r.to === todayISO()) => { const stmt = !!r.stmt; if (r.from > r.to) r = { from: r.to, to: r.from }; range = { from: r.from, to: r.to, live, stmt }; open.clear(); rerender(); };
   const date = (key) => key === 'to'
     ? h('button', { type: 'button', class: 'dfield dend', onclick: () => pickEnd(range.to, range.live, (d, l) => set({ from: range.from, to: d }, l)) }, h('span', {}, 'To'), h('b', {}, endText(range.to, range.live)))
     : h('label', { class: 'dfield' }, h('span', {}, 'From'),
       h('input', { type: 'date', value: range.from, max: todayISO(), onchange: (e) => e.target.value && set({ from: e.target.value, to: range.to }, range.live) }));
   return h('div', { class: 'rangebar' },
     h('div', { class: 'presets' }, rangePresets().map(([label, r]) =>
-      h('button', { class: 'chip' + (r.from === range.from && r.to === range.to ? ' on' : ''), onclick: () => set(r) }, label))),
+      h('button', { class: 'chip' + ((r.stmt ? range.stmt : !range.stmt && r.from === range.from && r.to === range.to) ? ' on' : ''), onclick: () => set(r) }, label))),
     h('div', { class: 'range' }, date('from'), date('to')));
 }
 // Spending tabs can switch to the charges behind what's owed on cards now (same list as the You owe tile).
@@ -637,16 +639,47 @@ function owedTxns(withPending) {
   return out;
 }
 
+// Statement: card charges since the earliest card's last statement, each tagged paid / unpaid / pending.
+const txKey = (t) => t.transaction_id || t.id || [t.account_id, t.date, t.name, t.amount].join('|');
+const cardIds = () => new Set(allAccounts().filter((a) => a.type === 'credit').map((a) => a.account_id));
+function statementRange() {
+  const cards = cardIds();
+  const dates = (data ? data.connections : []).flatMap((c) => ((c.liabilities && c.liabilities.credit) || [])
+    .filter((l) => cards.has(l.account_id) && l.last_statement_issue_date).map((l) => l.last_statement_issue_date));
+  if (!dates.length) return null;
+  return { from: shiftDays(dates.reduce((m, d) => (d < m ? d : m)), 1), to: todayISO(), stmt: true };
+}
+function statementTxns(r) {
+  const cards = cardIds(), unpaid = new Map(owedTxns(false).map((t) => [txKey(t), t.amount]));
+  const inR = (t) => cards.has(t.account_id) && t.date >= r.from && t.date <= r.to;
+  const posted = spending().filter(inR).map((t) => {
+    const u = unpaid.get(txKey(t));
+    return { ...t, unpaid: u || 0, stmt: t.amount <= 0 ? '' : u == null ? 'paid' : Math.abs(u - t.amount) < 0.005 ? 'unpaid' : 'partly paid' };
+  });
+  return [...allTxns().filter((t) => t.pending && inR(t) && !NOT_SPENDING.has(t.category)).map((t) => ({ ...t, stmt: 'pending' })), ...posted];
+}
+function statementSplit(list) {
+  const pend = list.filter((t) => t.pending).reduce((s, t) => s + t.amount, 0);
+  const unpaid = list.filter((t) => !t.pending).reduce((s, t) => s + t.unpaid, 0);
+  const paid = list.filter((t) => !t.pending).reduce((s, t) => s + t.amount, 0) - unpaid;
+  const part = (cls, v, label) => h('div', {}, h('span', { class: 'sw ' + cls }), h('div', {}, h('b', {}, money(v, true)), h('small', {}, label)));
+  return h('div', { class: 'split stmt-split' },
+    h('div', { class: 'splitbar' }, h('i', { class: 'paid', style: `flex:${Math.max(paid, 0.01)}` }), h('i', { class: 'posted', style: `flex:${Math.max(unpaid, 0.01)}` }), h('i', { class: 'pending', style: `flex:${Math.max(pend, 0.01)}` })),
+    h('div', { class: 'splitlegend' }, part('paid', paid, 'Paid'), part('posted', unpaid, 'Unpaid'), part('pending', pend, 'Pending')));
+}
+
 // ---------- Breakdowns (categories / merchants / paid with) ----------
 function breakdown(el, keyOf, labelOf, layout, icon) {
   if (!data || !data.connections.length) return noData(el);
   { const lb = loadingBanner(); if (lb) el.append(lb); }
   range = range || { ...thisMonthRange(), live: true };
   if (range.live && range.to !== todayISO()) range = { ...range, to: todayISO() };
+  if (range.stmt) { const s = statementRange(); range = s ? { ...range, from: s.from, to: s.to } : { ...range, stmt: false }; }
+  const stmt = range.stmt && !range.owed;
   const list = spending(), inR = (t, r) => t.date >= r.from && t.date <= r.to;
-  const inRange = range.owed ? owedTxns(range.pending) : list.filter((t) => inR(t, range)), total = inRange.reduce((s, t) => s + t.amount, 0);
+  const inRange = range.owed ? owedTxns(range.pending) : stmt ? statementTxns(range) : list.filter((t) => inR(t, range)), total = inRange.reduce((s, t) => s + t.amount, 0);
   const days = daysBetween(range.from, range.to) + 1;
-  const prevTotal = range.owed ? 0 : list.filter((t) => inR(t, { from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) })).reduce((s, t) => s + t.amount, 0);
+  const prevTotal = range.owed || stmt ? 0 : list.filter((t) => inR(t, { from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) })).reduce((s, t) => s + t.amount, 0);
   const diff = prevTotal ? ((total - prevTotal) / prevTotal) * 100 : null;
   setGlow(diff == null ? 0 : -diff);
   el.append(modeBar(render));
@@ -660,11 +693,12 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
     const top = sorted.slice(0, 7), rest = sorted.slice(7);
     const segs = top.map((g) => ({ v: g.v, color: g.color, on: open.has(g.k) }));
     if (rest.length) segs.push({ v: rest.reduce((s, g) => s + g.v, 0), color: PALETTE[8] });
-    el.append(h('div', { class: 'card hero-card' }, donut(segs, [h('div', { class: 'label' }, range.owed ? (range.pending ? 'Owed + pending' : 'Owed') : 'Spent'), num('donut-num', 'tot' + view + conn, total), diffEl],
+    el.append(h('div', { class: 'card hero-card' }, donut(segs, [h('div', { class: 'label' }, range.owed ? (range.pending ? 'Owed + pending' : 'Owed') : stmt ? 'This statement' : 'Spent'), num('donut-num', 'tot' + view + conn, total), diffEl],
       (i) => top[i] && toggle(top[i].k))));
   } else {
-    el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, range.owed ? (range.pending ? 'Owed + pending' : 'Owed') : 'Spent'), num('hero-num', 'tot' + view + conn, total, true), diffEl));
+    el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, range.owed ? (range.pending ? 'Owed + pending' : 'Owed') : stmt ? 'This statement' : 'Spent'), num('hero-num', 'tot' + view + conn, total, true), diffEl));
   }
+  if (stmt) el.append(h('div', { class: 'card stmt-card' }, statementSplit(inRange)));
   if (!sorted.length) { el.append(h('div', { class: 'empty small' }, range.owed ? 'Nothing owed on your cards' : 'Nothing spent in this range')); return; }
   const max = sorted[0].v || 1;
   if (layout === 'cards') {
