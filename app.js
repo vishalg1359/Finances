@@ -4,7 +4,7 @@
 const DEFAULT_SERVER = 'https://finances.vishalg.workers.dev';
 // Settings saved to the server so they follow the account, with a local copy for fast startup.
 let settingsReady = false;
-const SYNCED = ['loans', 'main', 'histDays', 'layout', 'graphs', 'cats', 'sort'];
+const SYNCED = ['loans', 'main', 'histDays', 'layout', 'graphs', 'cats', 'sort', 'show'];
 const store = {
   get: (k, d) => { try { const v = localStorage.getItem('fin.' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
   set: (k, v) => {
@@ -638,10 +638,10 @@ function owedTxns(withPending) {
 // Paid + unpaid: spending in the range plus pending, each tagged paid / unpaid / pending (non-card charges count as paid).
 const txKey = (t) => t.transaction_id || t.id || [t.account_id, t.date, t.name, t.amount].join('|');
 const cardIds = () => new Set(allAccounts().filter((a) => a.type === 'credit').map((a) => a.account_id));
-const showOf = () => range.show || { paid: true, unpaid: true, pending: false };
+const showOf = () => range.show || store.get('show', null) || { paid: true, unpaid: true, pending: false };
 function toggleBar(rerender) {
   const s = showOf();
-  const flip = (k) => { const n = { ...s, [k]: !s[k] }; if (!n.paid && !n.unpaid && !n.pending) return; range = { ...range, show: n }; open.clear(); rerender(); };
+  const flip = (k) => { const n = { ...s, [k]: !s[k] }; if (!n.paid && !n.unpaid && !n.pending) return; range = { ...range, show: n }; store.set('show', n); open.clear(); rerender(); };
   return h('div', { class: 'modebar' }, h('div', { class: 'seg small toggles' },
     [['paid', 'Paid'], ['unpaid', 'Unpaid'], ['pending', 'Pending']].map(([k, l]) => h('button', { class: s[k] ? 'on ' + k : '', onclick: () => flip(k) }, l))));
 }
