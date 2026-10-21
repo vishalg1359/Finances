@@ -345,3 +345,7 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .stag.paid { color: var(--good, #1fd286); }
 .stag.unpaid { color: var(--bad); }
 .stag.partly { color: var(--pend); }
+.modebar { flex-wrap: wrap; }
+.modebar .grow { display: none; }
+.modebar > .seg.small:last-child { order: -1; flex: 1 1 100%; margin-left: 0; }
+.modebar > .seg.small:last-child button { flex: 1; padding: 7px 4px; }
