@@ -18,7 +18,7 @@ let data = store.get('data', null);
 let recurring = store.get('recurring', []);
 let view = 'overview';
 const connBy = store.get('connBy', {});
-let conn = connBy[view] || 'all';
+let conn = 'all';
 let month = null;
 let open = new Set();
 let range = null;
@@ -87,7 +87,7 @@ async function pullSettings() {
 function gotData(d) {
   data = d; store.set('data', d);
   for (const k in connBy) if (connBy[k] !== 'all' && !d.connections.some((c) => c.item_id === connBy[k] && (c.accounts || []).some(isCard))) delete connBy[k];
-  conn = connBy[view] || 'all';
+  store.set('connBy', connBy); conn = connFor(view);
   render(); pollIfLoading();
 }
 async function refresh(manual) {
@@ -150,6 +150,8 @@ async function connect(item_id) {
 // Only credit cards count. The chips at the top pick one card issuer or all of them.
 const isCard = (a) => a.type === 'credit';
 const cardConns = () => (data ? data.connections.filter((c) => (c.accounts || []).some(isCard)) : []);
+// The card picked for a tab, or All when it's gone or there's only one card (the picker is hidden then).
+function connFor(v) { const id = connBy[v], cs = cardConns(); return id && id !== 'all' && cs.length > 1 && cs.some((c) => c.item_id === id) ? id : 'all'; }
 const shownConns = () => cardConns().filter((c) => conn === 'all' || c.item_id === conn);
 const allAccounts = () => shownConns().flatMap((c) => (c.accounts || []).filter(isCard).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
 // Card payments come through as credits under these; charges under them (e.g. Venmo on the card) still count.
@@ -973,7 +975,7 @@ function nudgeViewport() {
 function setTab() { for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.view === view); }
 function showView(name) {
   if (name === view) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
-  view = name; conn = connBy[name] || 'all'; month = null; open.clear(); setTab(); window.scrollTo(0, 0); render('fade');
+  view = name; conn = connFor(name); month = null; open.clear(); setTab(); window.scrollTo(0, 0); render('fade');
 }
 // Long swipe that starts at the screen edge moves between connections.
 let touch = null;
@@ -992,7 +994,7 @@ $('view').addEventListener('touchend', (e) => {
 // ---------- login ----------
 function logout() { store.del('pass'); store.del('data'); data = null; showLogin(); }
 function showLogin() { $('main').hidden = true; $('tabbar').hidden = true; $('login').hidden = false; $('login-url').value = store.get('server', DEFAULT_SERVER); }
-function showApp() { $('login').hidden = true; $('main').hidden = false; $('tabbar').hidden = false; view = 'overview'; conn = connBy.overview || 'all'; setTab(); render('fade'); nudgeViewport(); }
+function showApp() { $('login').hidden = true; $('main').hidden = false; $('tabbar').hidden = false; view = 'overview'; conn = connFor('overview'); setTab(); render('fade'); nudgeViewport(); }
 $('login-btn').addEventListener('click', async () => {
   store.set('server', $('login-url').value.trim()); store.set('pass', $('login-pass').value);
   $('login-err').textContent = '';
