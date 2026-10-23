@@ -6,7 +6,7 @@ const DEFAULT_SERVER = 'https://finances.vishalg.workers.dev';
 let settingsReady = false;
 const SYNCED = ['recurring', 'graphs', 'cats', 'sort', 'show'];
 const store = {
-  get: (k, d) => { try { const v = localStorage.getItem('fin.' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
+  get: (k, d) => { try { const v = localStorage.getItem('fin.' + k), r = v == null ? null : JSON.parse(v); return r == null ? d : r; } catch (_) { return d; } },
   set: (k, v) => {
     try { localStorage.setItem('fin.' + k, JSON.stringify(v)); } catch (_) {}
     if (SYNCED.includes(k) && settingsReady) { localStorage.setItem('fin.settingsAt', Date.now()); localStorage.setItem('fin.settingsDirty', '1'); pushSettings(); }
@@ -406,25 +406,19 @@ function noData(el) {
 }
 
 // ---------- Home ----------
-const homeSplit = (posted, p) => h('div', { class: 'split' },
-  h('div', { class: 'splitbar' }, h('i', { class: 'posted', style: `flex:${Math.max(posted, 0.01)}` }), h('i', { class: 'pending', style: `flex:${Math.max(p, 0.01)}` })),
-  h('div', { class: 'splitlegend' },
-    h('div', {}, h('span', { class: 'sw posted' }), h('div', {}, h('b', {}, money(posted, true)), h('small', {}, 'Owed'))),
-    h('div', {}, h('span', { class: 'sw pending' }), h('div', {}, h('b', {}, money(p, true)), h('small', {}, 'Pending'))),
-    h('div', {}, h('div', {}, h('b', {}, money(posted + p, true)), h('small', {}, 'With pending')))));
 function viewHome(el) {
   if (!data || !data.connections.length) { noData(el); return; }
   { const lb = loadingBanner(); if (lb) el.append(lb); }
   const cards = allAccounts(), ids = new Set(cards.map((a) => a.account_id)), owed = cards.reduce((s, a) => s + (a.balances.current || 0), 0);
-  const pend = allTxns().filter((t) => t.pending && ids.has(t.account_id)).reduce((s, t) => s + t.amount, 0);
-  el.append(h('section', { class: 'hero-block tap', onclick: () => openSheet({ title: 'You owe', list: () => owedTxns(true).filter((t) => ids.has(t.account_id)), head: () => homeSplit(owed, pend) }) },
+  el.append(h('section', { class: 'hero-block tap', onclick: () => openSheet({ title: 'You owe', list: () => owedTxns(false).filter((t) => ids.has(t.account_id)) }) },
     h('div', { class: 'label' }, 'You owe'), num('hero-num', 'owe' + conn, owed, true),
-    pend ? h('div', { class: 'change muted' }, (pend < 0 ? '−' : '+') + money(Math.abs(pend), true) + ' pending') : null, updatedLine()));
-  const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
+    updatedLine()));
+  const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0, recSpent = byMonth(spending().filter((t) => t.manual))[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
   const pace = paceChart();
   el.append(h('div', { class: 'card tap spendcard', onclick: () => openSheet({ title: 'Spent this month', graph: { type: 'spend', period: '1Y', by: 'month' }, list: () => spending().filter((t) => monthKey(t.date) === m), head: () => h('button', { class: 'btn small', onclick: () => { closePanel(true); showView('categories'); } }, 'By category') }) },
     h('div', { class: 'label' }, 'Spent this month'), num('big', 'spent' + conn, spent, true),
+    recSpent ? h('div', { class: 'change muted' }, money(spent - recSpent, true) + ' on cards · ' + money(recSpent, true) + ' recurring') : null,
     pace ? h('div', { class: 'linewrap' }, pace.svg) : null,
     pace ? h('div', { class: 'pace-foot' },
       h('span', { class: pace.diff > 0 ? 'neg' : 'pos' }, `${money(Math.abs(pace.diff))} ${pace.diff > 0 ? 'more' : 'less'} than this time last month`),
@@ -530,23 +524,28 @@ function owedTxns(withPending) {
   return out;
 }
 
-// Paid + unpaid: spending in the range plus pending, each tagged paid / unpaid / pending (non-card charges count as paid).
+// Paid / unpaid card spending plus recurring payments you entered, each tagged paid / unpaid / recurring.
 const txKey = (t) => t.transaction_id || t.id || [t.account_id, t.date, t.name, t.amount].join('|');
 const cardIds = () => new Set(allAccounts().filter((a) => a.type === 'credit').map((a) => a.account_id));
-const showOf = () => range.show || store.get('show', null) || { paid: true, unpaid: true, pending: false };
+const SHOWS = [['paid', 'Paid'], ['unpaid', 'Unpaid'], ['recurring', 'Recurring']];
+const normShow = (x) => { if (!x) return { paid: true, unpaid: true, recurring: true }; const n = { paid: !!x.paid, unpaid: !!x.unpaid, recurring: x.recurring !== false }; if (!n.paid && !n.unpaid && !n.recurring) n.paid = n.unpaid = true; return n; };
+const allShown = (s) => s.paid && s.unpaid && s.recurring;
+const showHeading = (s) => (allShown(s) ? 'Spent' : s.paid && s.unpaid && !s.recurring ? 'Spent on cards' : SHOWS.filter(([k]) => s[k]).map(([k, l]) => (k === 'unpaid' && !s.paid ? 'Owed' : l)).join(' + '));
+const showOf = () => normShow(range.show || store.get('show', null));
 function toggleBar(rerender) {
   const s = showOf();
-  const flip = (k) => { const n = { ...s, [k]: !s[k] }; if (!n.paid && !n.unpaid && !n.pending) return; range = { ...range, show: n }; store.set('show', n); open.clear(); rerender(); };
+  const flip = (k) => { const n = { ...s, [k]: !s[k] }; if (!n.paid && !n.unpaid && !n.recurring) return; range = { ...range, show: n }; store.set('show', n); open.clear(); rerender(); };
   return h('div', { class: 'modebar' }, h('div', { class: 'seg small toggles' },
-    [['paid', 'Paid'], ['unpaid', 'Unpaid'], ['pending', 'Pending']].map(([k, l]) => h('button', { class: s[k] ? 'on ' + k : '', onclick: () => flip(k) }, l))));
+    SHOWS.map(([k, l]) => h('button', { class: s[k] ? 'on ' + k : '', onclick: () => flip(k) }, l))));
 }
-// Paid and unpaid parts of posted spending in the range, plus pending. Without Paid it's exactly what's owed on cards, any date.
+// Paid and unpaid parts of card spending in the range, plus recurring. Without Paid, unpaid is exactly what's owed on cards, any date.
 function shownTxns(s, r) {
   const cards = cardIds(), dated = s.paid, out = [];
-  const inR = (t) => !dated || (t.date >= r.from && t.date <= r.to);
+  const inR = (t) => t.date >= r.from && t.date <= r.to;
+  if (s.recurring) for (const t of spending()) if (t.manual && inR(t)) out.push({ ...t, recPart: t.amount, stmt: 'recurring' });
   if (s.paid || s.unpaid) {
     const unpaid = new Map(owedTxns(false).map((t) => [txKey(t), t.amount]));
-    for (const t of dated ? spending().filter(inR) : owedTxns(false)) {
+    for (const t of dated ? spending().filter((t) => !t.manual && inR(t)) : owedTxns(false)) {
       const u = !dated ? t.amount : cards.has(t.account_id) ? unpaid.get(txKey(t)) || 0 : 0;
       const paidPart = s.paid ? t.amount - u : 0, unpaidPart = s.unpaid ? u : 0;
       if (Math.abs(paidPart + unpaidPart) < 0.005) continue;
@@ -554,12 +553,11 @@ function shownTxns(s, r) {
       out.push({ ...t, amount: Math.round((paidPart + unpaidPart) * 100) / 100, paidPart, unpaidPart, stmt });
     }
   }
-  if (s.pending) out.push(...(s.unpaid && !s.paid ? owedTxns(true).filter((t) => t.pending) : txns().filter((t) => t.pending && isSpend(t) && inR(t))).map((t) => ({ ...t, stmt: 'pending' })));
   return out;
 }
 function statusSplit(list, s) {
   const sum = (f) => list.reduce((n, t) => n + f(t), 0);
-  const parts = [['paid', 'paid', 'Paid', sum((t) => t.paidPart || 0)], ['unpaid', 'posted', 'Unpaid', sum((t) => t.unpaidPart || 0)], ['pending', 'pending', 'Pending', sum((t) => (t.pending ? t.amount : 0))]].filter((p) => s[p[0]]);
+  const parts = [['paid', 'paid', 'Paid', sum((t) => t.paidPart || 0)], ['unpaid', 'posted', 'Unpaid', sum((t) => t.unpaidPart || 0)], ['recurring', 'rec', 'Recurring', sum((t) => t.recPart || 0)]].filter((p) => s[p[0]]);
   return h('div', { class: 'split stmt-split' },
     h('div', { class: 'splitbar' }, parts.map(([, cls, , v]) => h('i', { class: cls, style: `flex:${Math.max(v, 0.01)}` }))),
     h('div', { class: 'splitlegend' }, parts.map(([, cls, label, v]) => h('div', {}, h('span', { class: 'sw ' + cls }), h('div', {}, h('b', {}, money(v, true)), h('small', {}, label))))));
@@ -571,8 +569,8 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
   { const lb = loadingBanner(); if (lb) el.append(lb); }
   range = range || { ...thisMonthRange(), live: true };
   if (range.live && range.to !== todayISO()) range = { ...range, to: todayISO() };
-  const s = showOf(), plain = s.paid && s.unpaid && !s.pending, on = ['paid', 'unpaid', 'pending'].filter((k) => s[k]).length;
-  const heading = [s.paid && s.unpaid ? 'Spent' : s.paid ? 'Paid' : s.unpaid ? 'Owed' : '', s.pending ? 'pending' : ''].filter(Boolean).join(' + ').replace(/^./, (c) => c.toUpperCase());
+  const s = showOf(), plain = allShown(s), on = SHOWS.filter(([k]) => s[k]).length;
+  const heading = showHeading(s);
   const list = spending(), inR = (t, r) => t.date >= r.from && t.date <= r.to;
   const inRange = shownTxns(s, range), total = inRange.reduce((s, t) => s + t.amount, 0);
   const days = daysBetween(range.from, range.to) + 1;
@@ -580,7 +578,7 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
   const diff = prevTotal ? ((total - prevTotal) / prevTotal) * 100 : null;
   setGlow(diff == null ? 0 : -diff);
   el.append(toggleBar(render));
-  if (s.paid) el.append(rangeBar(render));
+  if (s.paid || s.recurring) el.append(rangeBar(render));
   const groups = {};
   for (const t of inRange) (groups[keyOf(t)] = groups[keyOf(t)] || []).push(t);
   const sorted = Object.entries(groups).map(([k, l]) => ({ k, l, v: l.reduce((s, t) => s + t.amount, 0) })).filter((g) => Math.abs(g.v) > 0.005).sort((a, b) => b.v - a.v);
@@ -596,7 +594,7 @@ function breakdown(el, keyOf, labelOf, layout, icon) {
     el.append(h('section', { class: 'hero-block' }, h('div', { class: 'label' }, heading), num('hero-num', 'tot' + view + conn, total, true), diffEl));
   }
   if (on > 1) el.append(h('div', { class: 'card stmt-card' }, statusSplit(inRange, s)));
-  if (!sorted.length) { el.append(h('div', { class: 'empty small' }, s.paid ? 'Nothing spent in this range' : s.unpaid ? 'Nothing owed on your cards' : 'Nothing pending')); return; }
+  if (!sorted.length) { el.append(h('div', { class: 'empty small' }, s.paid || s.recurring ? 'Nothing spent in this range' : 'Nothing owed on your cards')); return; }
   const max = sorted[0].v || 1;
   if (layout === 'cards') {
     const grid = h('div', { class: 'cardgrid' });
@@ -683,8 +681,8 @@ function series(g) {
   const c = cs.size === 1 && !ms.size ? catColor([...cs][0]) : '#ff5a5f';
   return { ...base, sets: [{ c, v: sumBy(shownTxns(gShow(g), { from, to }).filter((t) => any || cs.has(t.category) || ms.has(t.name)), 1) }] };
 }
-const gShow = (g) => g.show || { paid: true, unpaid: true, pending: false };
-const gShowLabel = (g) => { const s = gShow(g); return s.paid && s.unpaid && !s.pending ? '' : ['paid', 'unpaid', 'pending'].filter((k) => s[k]).map((k) => k[0].toUpperCase() + k.slice(1)).join(' + '); };
+const gShow = (g) => normShow(g.show);
+const gShowLabel = (g) => { const s = gShow(g); return allShown(s) ? '' : showHeading(s); };
 function gTitle(g) {
   if (g.title) return g.title;
   const accs = (g.accts || []).map((id) => everyAccount().find((a) => a.account_id === id)).filter(Boolean);
@@ -770,8 +768,8 @@ function openGraphEditor(orig, preset) {
     el.append(h('div', { class: 'card' }, h('div', { class: 'field' }, h('label', {}, 'Name'),
       h('input', { type: 'text', value: f.title || '', placeholder: gTitle({ ...f, title: '' }), oninput: (e) => { f.title = e.target.value.trim() || undefined; refresh(); } }))));
     { const sh = gShow(f);
-      el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Include'), h('div', { class: 'presets wrap' }, [['paid', 'Paid'], ['unpaid', 'Unpaid'], ['pending', 'Pending']].map(([k, l]) =>
-        h('button', { class: 'chip' + (sh[k] ? ' on' : ''), onclick: () => { const n = { ...sh, [k]: !sh[k] }; if (n.paid || n.unpaid || n.pending) { f.show = n; renderPanel(); } } }, l))))); }
+      el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Include'), h('div', { class: 'presets wrap' }, SHOWS.map(([k, l]) =>
+        h('button', { class: 'chip' + (sh[k] ? ' on' : ''), onclick: () => { const n = { ...sh, [k]: !sh[k] }; if (n.paid || n.unpaid || n.recurring) { f.show = n; renderPanel(); } } }, l))))); }
     if (f.type === 'spend') {
       const tot = {}; for (const t of spending()) if (t.amount > 0) { tot['c' + t.category] = (tot['c' + t.category] || 0) + t.amount; tot['m' + t.name] = (tot['m' + t.name] || 0) + t.amount; }
       const top = (p) => Object.keys(tot).filter((k) => k[0] === p).sort((a, b) => tot[b] - tot[a]).map((k) => k.slice(1));
