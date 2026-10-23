@@ -4,7 +4,7 @@
 const DEFAULT_SERVER = 'https://finances.vishalg.workers.dev';
 // Settings saved to the server so they follow the account, with a local copy for fast startup.
 let settingsReady = false;
-const SYNCED = ['recurring', 'graphs', 'cats', 'sort', 'show'];
+const SYNCED = ['recurring', 'graphs', 'cats', 'sort', 'show', 'splits'];
 const store = {
   get: (k, d) => { try { const v = localStorage.getItem('fin.' + k), r = v == null ? null : JSON.parse(v); return r == null ? d : r; } catch (_) { return d; } },
   set: (k, v) => {
@@ -80,7 +80,7 @@ async function pullSettings() {
     if (s.values[k] == null) localStorage.removeItem('fin.' + k); else localStorage.setItem('fin.' + k, JSON.stringify(s.values[k]));
   }
   localStorage.setItem('fin.settingsAt', s.updated);
-  recurring = store.get('recurring', []); cats = store.get('cats', { tx: {}, rules: {} }); txSort = store.get('sort', 'time');
+  recurring = store.get('recurring', []); cats = store.get('cats', { tx: {}, rules: {} }); splits = store.get('splits', { tx: {}, rules: {} }); txSort = store.get('sort', 'time');
   graphs = loadGraphs();
   render(); if (panel) renderPanel();
 }
@@ -155,12 +155,18 @@ const allAccounts = () => shownConns().flatMap((c) => (c.accounts || []).filter(
 // Card payments come through as credits under these; charges under them (e.g. Venmo on the card) still count.
 const SPEND_OUT = new Set(['TRANSFER_OUT', 'LOAN_PAYMENTS']);
 const isSpend = (t) => t.category !== 'INCOME' && t.category !== 'TRANSFER_IN' && !(t.amount < 0 && SPEND_OUT.has(t.category));
+const tid = (t) => t.id || t.transaction_id;
 let cats = store.get('cats', { tx: {}, rules: {} }), catsCache = null;
+// Splits: your share of a charge, per charge ({ div } or { back }) or for every charge from a merchant ({ div }).
+let splits = store.get('splits', { tx: {}, rules: {} });
+const splitOf = (t) => splits.tx[tid(t)] || splits.rules[t.name] || null;
+const myShare = (amt, x) => Math.round((x.div ? amt / x.div : Math.max(0, amt - (x.back || 0))) * 100) / 100;
+const withSplit = (t) => { const x = !t.manual && splitOf(t); return x && x.div !== 1 && (x.div || t.amount > 0) ? { ...t, amount: myShare(t.amount, x), full: t.amount } : t; };
 const allTxns = () => {
   if (!data) return [];
-  if (catsCache && catsCache.src === data.transactions && catsCache.v === cats && catsCache.r === recurring && catsCache.d === todayISO()) return catsCache.out;
-  const out = data.transactions.concat(recurringTxns()).map((t) => { const c = cats.tx[t.transaction_id] || cats.rules[t.name]; return c && c !== t.category ? { ...t, category: c, origCategory: t.category } : t; });
-  catsCache = { src: data.transactions, v: cats, r: recurring, d: todayISO(), out };
+  if (catsCache && catsCache.src === data.transactions && catsCache.v === cats && catsCache.s === splits && catsCache.r === recurring && catsCache.d === todayISO()) return catsCache.out;
+  const out = data.transactions.concat(recurringTxns()).map((t) => { const c = cats.tx[tid(t)] || cats.rules[t.name]; return withSplit(c && c !== t.category ? { ...t, category: c, origCategory: t.category } : t); });
+  catsCache = { src: data.transactions, v: cats, s: splits, r: recurring, d: todayISO(), out };
   return out;
 };
 const txns = () => { const ids = new Set(allAccounts().map((a) => a.account_id)); if (conn === 'all') ids.add('manual'); return allTxns().filter((t) => ids.has(t.account_id)); };
@@ -168,7 +174,7 @@ const txns = () => { const ids = new Set(allAccounts().map((a) => a.account_id))
 let spendCache = { key: null, list: [] };
 function spending() {
   const all = txns(), key = (data && data.synced) + '|' + conn + '|' + all.length;
-  if (spendCache.key === key && spendCache.cats === cats && spendCache.r === recurring) return spendCache.list;
+  if (spendCache.key === key && spendCache.cats === cats && spendCache.s === splits && spendCache.r === recurring) return spendCache.list;
   const list = all.filter((t) => !t.pending && isSpend(t));
   const charges = list.filter((t) => t.amount > 0), refunds = list.filter((t) => t.amount < 0), drop = new Set();
   const names = new Set(charges.map((t) => t.name));
@@ -176,7 +182,7 @@ function spending() {
     const c = charges.find((x) => !drop.has(x.id) && x.name === r.name && Math.abs(x.amount + r.amount) < 0.01 && x.date <= r.date && daysBetween(x.date, r.date) <= 120);
     if (c) { drop.add(c.id); drop.add(r.id); }
   }
-  spendCache = { key, cats, r: recurring, list: list.filter((t) => !drop.has(t.id) && (t.amount > 0 || names.has(t.name))) };
+  spendCache = { key, cats, s: splits, r: recurring, list: list.filter((t) => !drop.has(t.id) && (t.amount > 0 || names.has(t.name))) };
   return spendCache.list;
 }
 function byMonth(list, sign = 1) {
@@ -215,7 +221,8 @@ const daysBetween = (a, b) => Math.max(0, Math.round((new Date(b + 'T12:00') - n
 const EVERY = [['weekly', 'Weekly'], ['2weeks', 'Every 2 weeks'], ['monthly', 'Monthly'], ['yearly', 'Yearly']];
 const PER_MONTH = { weekly: 52 / 12, '2weeks': 26 / 12, monthly: 1, yearly: 1 / 12 };
 const everyName = (k) => (EVERY.find((e) => e[0] === k) || [, 'Monthly'])[1];
-const perMo = (l) => l.reduce((s, r) => s + r.amount * (PER_MONTH[r.every] || 1), 0);
+const recAmt = (r) => (r.share > 0 && r.share < r.amount ? r.share : r.amount);
+const perMo = (l) => l.reduce((s, r) => s + recAmt(r) * (PER_MONTH[r.every] || 1), 0);
 function recurringDates(r, to) {
   const out = [], end = r.end && r.end < to ? r.end : to;
   if (!r.start) return out;
@@ -233,7 +240,7 @@ const nextDate = (r) => { const d = recurringDates({ ...r, end: '' }, shiftDays(
 // Each counted payment becomes a paid transaction on every date it repeats, up to today.
 const recurringTxns = () => recurring.filter((r) => r.count !== false && r.amount > 0).flatMap((r) => recurringDates(r, todayISO()).map((d) => ({
   id: 'rec:' + r.id + ':' + d, transaction_id: 'rec:' + r.id + ':' + d, account_id: 'manual', manual: true,
-  name: r.name || 'Recurring', amount: r.amount, date: d, category: r.category || 'OTHER', pending: false })));
+  name: r.name || 'Recurring', amount: recAmt(r), ...(recAmt(r) !== r.amount ? { full: r.amount } : {}), date: d, category: r.category || 'OTHER', pending: false })));
 const saveRecurring = (l) => { recurring = l; store.set('recurring', recurring); render(); renderPanel(); };
 
 // ---------- charts ----------
@@ -348,25 +355,42 @@ const isDebt = (a) => a.type === 'credit' || a.type === 'loan';
 const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const shortDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const txnRow = (t) => h('div', { class: 'row tap', onclick: (e) => { e.stopPropagation(); pickCategory(t); } }, logo(t), h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name),
-  h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + catName(t.category) + (t.pending ? ' · pending' : '') + (t.amount < 0 && isSpend(t) ? ' · refund' : ''),
+  h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + catName(t.category) + (t.pending ? ' · pending' : '') + (t.amount < 0 && isSpend(t) ? ' · refund' : '') + (t.full ? ' · your share of ' + money(Math.abs(t.full), true) : ''),
     t.stmt && t.stmt !== 'pending' ? h('span', { class: 'stag ' + t.stmt.split(' ')[0] }, ' · ' + t.stmt) : null)),
   h('div', { class: 'amt ' + (t.amount < 0 ? 'pos' : 'neg') }, (t.amount < 0 ? '+' : '−') + money(Math.abs(t.amount), true)));
 const CAT_LIST = ['FOOD_AND_DRINK', 'RENT_AND_UTILITIES', 'GENERAL_MERCHANDISE', 'TRANSPORTATION', 'TRAVEL', 'ENTERTAINMENT', 'PERSONAL_CARE', 'MEDICAL', 'GENERAL_SERVICES', 'HOME_IMPROVEMENT', 'GOVERNMENT_AND_NON_PROFIT', 'BANK_FEES', 'OTHER', 'LOAN_PAYMENTS', 'INCOME', 'TRANSFER_OUT', 'TRANSFER_IN'];
 const catName = (c) => ({ TRANSFER_OUT: 'Transfer out', TRANSFER_IN: 'Transfer in', RENT_AND_UTILITIES: 'Rent & utilities', FOOD_AND_DRINK: 'Food & drink', GOVERNMENT_AND_NON_PROFIT: 'Government & nonprofit' }[c] || nice(c));
 function pickCategory(t) {
-  const orig = t.origCategory || t.category, ruled = !!cats.rules[t.name];
+  const orig = t.origCategory || t.category, ruled = !!cats.rules[t.name] || !!splits.rules[t.name];
+  const raw = data.transactions.find((x) => tid(x) === tid(t)), full = t.manual ? t.full ?? t.amount : raw ? raw.amount : t.amount;
   let all = ruled;
+  const setSplit = (v) => {
+    const tx = { ...splits.tx }, rules = { ...splits.rules };
+    if (all) { if (v) rules[t.name] = v; else delete rules[t.name]; for (const x of data.transactions) if (x.name === t.name) delete tx[tid(x)]; }
+    else if (v) tx[tid(t)] = v; else if (rules[t.name]) tx[tid(t)] = { div: 1 }; else delete tx[tid(t)];
+    splits = { tx, rules }; store.set('splits', splits); setTimeout(() => { draw(); render(); renderPanel(); });
+  };
+  const splitBox = () => {
+    if (t.manual) return h('div', { class: 'pk-split muted' }, 'To split a recurring payment, set your share on it in Recurring payments.');
+    const cur = all ? splits.rules[t.name] || null : splitOf(t), on = cur && cur.div !== 1 ? cur : null;
+    return h('div', { class: 'pk-split' }, h('div', { class: 'label' }, on ? 'Split · your share ' + money(myShare(full, on), true) : 'Split'),
+      h('div', { class: 'presets wrap' }, [[0, 'Not split'], [2, '÷ 2'], [3, '÷ 3'], [4, '÷ 4']].map(([n, l]) =>
+        h('button', { class: 'chip' + ((n ? on && on.div === n : !on) ? ' on' : ''), onclick: () => setSplit(n ? { div: n } : null) }, l))),
+      !all && full > 0 ? h('div', { class: 'field' }, h('label', {}, 'Or money you got back'), h('input', { type: 'number', inputmode: 'decimal', step: 'any', placeholder: '0.00', value: on && on.back ? on.back : '',
+        onchange: (e) => { const v = parseFloat(e.target.value) || 0; setSplit(v > 0 ? { back: Math.min(v, full) } : null); } })) : null);
+  };
   const close = () => { ov.classList.add('closing'); setTimeout(() => ov.remove(), 200); };
   const apply = (c) => {
     const tx = { ...cats.tx }, rules = { ...cats.rules };
-    if (all) { delete tx[t.transaction_id]; if (c === orig) delete rules[t.name]; else rules[t.name] = c; for (const x of data.transactions) if (x.name === t.name) delete tx[x.transaction_id]; }
-    else { if (c === (rules[t.name] || orig)) delete tx[t.transaction_id]; else tx[t.transaction_id] = c; }
+    if (all) { delete tx[tid(t)]; if (c === orig) delete rules[t.name]; else rules[t.name] = c; for (const x of data.transactions) if (x.name === t.name) delete tx[tid(x)]; }
+    else { if (c === (rules[t.name] || orig)) delete tx[tid(t)]; else tx[tid(t)] = c; }
     cats = { tx, rules }; store.set('cats', cats); close(); render(); renderPanel();
   };
   const body = () => [
-    h('div', { class: 'pk-head' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name), h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + (t.amount < 0 ? '+' : '−') + money(Math.abs(t.amount), true))), h('button', { class: 'gbtn', onclick: close }, 'Done')),
+    h('div', { class: 'pk-head' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, t.name), h('div', { class: 'sub' }, shortDay(t.date) + ' · ' + (full < 0 ? '+' : '−') + money(Math.abs(full), true))), h('button', { class: 'gbtn', onclick: close }, 'Done')),
     h('div', { class: 'pk-scope' }, h('button', { class: 'chip' + (!all ? ' on' : ''), onclick: () => { all = false; draw(); } }, 'Just this one'),
       h('button', { class: 'chip' + (all ? ' on' : ''), onclick: () => { all = true; draw(); } }, 'All from ' + t.name)),
+    splitBox(),
     h('div', { class: 'pk-list' }, CAT_LIST.map((c) => h('button', { class: 'pk-cat' + (c === t.category ? ' on' : ''), onclick: () => apply(c) },
       catName(c), c === orig ? h('span', { class: 'muted' }, ' · bank\'s pick') : null, c === 'TRANSFER_IN' || c === 'INCOME' ? h('span', { class: 'muted' }, ' · not spending') : null))),
   ];
@@ -431,7 +455,7 @@ function viewHome(el) {
 const recRow = (r, extra) => { const k = r.category || 'OTHER', nx = nextDate(r);
   return h('div', { class: 'row' }, catBadge({ k, color: catColor(k) }),
     h('div', { class: 'grow' }, h('div', { class: 'name' }, r.name), h('div', { class: 'sub' }, everyName(r.every) + (nx ? ' · next ' + shortDay(nx) : ' · ended') + (r.count === false ? ' · not counted' : ''))),
-    h('div', { class: 'amt' }, money(r.amount, true)), extra || null); };
+    h('div', { class: 'amt' }, money(recAmt(r), true), recAmt(r) !== r.amount ? h('div', { class: 'sub' }, 'of ' + money(r.amount, true)) : null), extra || null); };
 function openRecurringList() {
   openSheet({ title: 'Recurring payments', render: (el) => {
     const counted = recurring.filter((r) => r.count !== false);
@@ -452,7 +476,7 @@ function recurringForm(el, existing) {
     oninput: (e) => { r[key] = type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value; }, ...extra }));
   const chips = (opts, key) => { const box = h('div', { class: 'presets wrap' }), draw = () => box.replaceChildren(...opts.map(([v, l]) => h('button', { class: 'chip' + (r[key] === v ? ' on' : ''), onclick: () => { r[key] = v; draw(); } }, l))); draw(); return box; };
   el.replaceChildren(h('div', { class: 'card' }, h('h2', {}, existing ? 'Edit recurring payment' : 'Add a recurring payment'),
-    f('Name', 'name', 'text', { placeholder: 'Rent' }), f('Amount', 'amount', 'number', { placeholder: '0.00' }),
+    f('Name', 'name', 'text', { placeholder: 'Rent' }), f('Amount', 'amount', 'number', { placeholder: '0.00' }), f('Your share (optional)', 'share', 'number', { placeholder: 'All of it' }),
     h('div', { class: 'label' }, 'Repeats'), chips(EVERY, 'every'),
     f('First payment', 'start', 'date'), f('Last payment (optional)', 'end', 'date'),
     h('div', { class: 'label' }, 'Category'), chips(CAT_LIST.map((c) => [c, catName(c)]), 'category'),
@@ -462,6 +486,7 @@ function recurringForm(el, existing) {
       r.name = String(r.name || '').trim();
       if (!r.name || !(r.amount > 0) || !r.start) return toast('Add a name, an amount and a first payment date.');
       if (r.end && r.end < r.start) r.end = '';
+      if (!(r.share > 0 && r.share < r.amount)) delete r.share;
       saveRecurring(recurring.some((x) => x.id === r.id) ? recurring.map((x) => (x.id === r.id ? r : x)) : recurring.concat(r));
     } }, 'Save'),
     existing ? h('button', { class: 'btn danger', onclick: () => saveRecurring(recurring.filter((x) => x.id !== r.id)) }, 'Delete') : null,
@@ -517,7 +542,8 @@ function owedTxns(withPending) {
     let left = a.balances.current || 0;
     for (const t of mine.filter((t) => !t.pending && !(t.amount < 0 && CARD_PAYMENT.has(t.category))).sort((x, y) => (x.date < y.date ? 1 : -1))) {
       if (left <= 0.005) break;
-      out.push(t.amount > left ? { ...t, amount: Math.round(left * 100) / 100 } : t); left -= t.amount;
+      const full = t.full ?? t.amount;
+      out.push(full > left ? { ...t, amount: Math.round(left * (t.full ? t.amount / t.full : 1) * 100) / 100 } : t); left -= full;
     }
     if (withPending) out.push(...mine.filter((t) => t.pending));
   }

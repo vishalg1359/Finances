@@ -379,3 +379,6 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .splitbar .rec, .sw.rec { background: var(--rec); }
 .stag.recurring { color: var(--rec); }
 .toggles button.on.recurring { background: color-mix(in srgb, var(--rec) 18%, var(--card)); color: var(--rec); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rec) 35%, transparent); }
+.pk-split { margin-bottom: 12px; }
+.pk-split .label { margin: 6px 0 8px; }
+.pk-split.muted { font-size: 13px; }
