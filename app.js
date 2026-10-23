@@ -313,22 +313,22 @@ function paint(node, v, cents) {
   if (cents && i > 0 && node.classList.contains('hero-num')) node.replaceChildren(str.slice(0, i), h('span', { class: 'cents' }, str.slice(i)));
   else node.textContent = str;
 }
-function paceChart() {
-  const t = todayISO(), d = new Date(t + 'T12:00'), y = d.getFullYear(), mo = d.getMonth(), today = d.getDate();
-  const curDays = new Date(y, mo + 1, 0).getDate(), prevDays = new Date(y, mo, 0).getDate();
-  const cur = monthKey(t), prev = lastMonths(2)[0];
-  const running = (m, n) => { const a = Array(n).fill(0); for (const x of spending()) if (monthKey(x.date) === m) a[+x.date.slice(8) - 1] += x.amount; let s = 0; return a.map((v) => (s += v)); };
-  const c = running(cur, curDays).slice(0, today), p = running(prev, prevDays);
-  if (!p[p.length - 1]) return null;
-  const W = 320, H = 86, n = Math.max(curDays, prevDays), max = Math.max(1, ...c, ...p);
-  const xy = (v, i) => [((i / (n - 1)) * W).toFixed(1), (H - 4 - (Math.max(0, v) / max) * (H - 10)).toFixed(1)];
-  const pts = (arr) => arr.map((v, i) => xy(v, i).join(',')).join(' ');
-  const [ex, ey] = xy(c[c.length - 1], c.length - 1);
-  const svg = h('svg', { class: 'chart pace', viewBox: `0 0 ${W} ${H}`, html:
-    `<polyline points="${pts(p)}" fill="none" stroke="var(--dim)" stroke-width="2" stroke-dasharray="2 5" stroke-linecap="round"/>` +
-    `<polyline class="stroke" pathLength="1" points="${pts(c)}" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>` +
-    `<circle cx="${ex}" cy="${ey}" r="4" fill="var(--accent)"/>` });
-  return { svg, diff: c[c.length - 1] - p[Math.min(today, prevDays) - 1] };
+// Last 6 months, recurring as the flat bottom part of each bar and card spending stacked on top.
+const kMoney = (v) => (v >= 1000 ? '$' + (v / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : '$' + Math.round(v));
+function monthBars() {
+  const ms = lastMonths(6), sp = spending(), rec = byMonth(sp.filter((t) => t.manual)), all = byMonth(sp);
+  const vals = ms.map((m) => { const r = Math.max(0, rec[m] || 0); return { m, r, c: Math.max(0, (all[m] || 0) - r) }; });
+  if (!vals.some((v) => v.r + v.c > 0)) return null;
+  const W = 320, H = 96, T = 14, max = Math.max(1, ...vals.map((v) => v.r + v.c)), bw = W / ms.length, cur = ms[ms.length - 1], y0 = T + H;
+  const svg = h('svg', { class: 'chart mbars', viewBox: `0 0 ${W} ${y0 + 16}` });
+  svg.innerHTML = vals.map((v, i) => {
+    const on = v.m === cur, x = i * bw + bw * 0.2, w = bw * 0.6, rh = (v.r / max) * (H - 2), ch = (v.c / max) * (H - 2), op = on ? 1 : 0.5;
+    return (rh ? `<rect x="${x}" y="${y0 - rh}" width="${w}" height="${rh}" rx="3" fill="var(--rec)" opacity="${op}"/>` : '') +
+      (ch ? `<rect x="${x}" y="${y0 - rh - ch}" width="${w}" height="${ch}" rx="3" fill="var(--accent)" opacity="${op}"/>` : '') +
+      (v.r + v.c ? `<text x="${x + w / 2}" y="${y0 - rh - ch - 4}" font-size="10" font-weight="600" text-anchor="middle" fill="${on ? 'var(--fg)' : 'var(--muted)'}">${kMoney(v.r + v.c)}</text>` : '') +
+      `<text x="${x + w / 2}" y="${y0 + 13}" font-size="10" text-anchor="middle" fill="${on ? 'var(--fg)' : 'var(--dim)'}">${monthName(v.m)}</text>`;
+  }).join('');
+  return { svg, hasRec: vals.some((v) => v.r > 0) };
 }
 const logo = (t) => h('div', { class: 'logo' }, t.logo ? h('img', { src: t.logo, alt: '' }) : (t.name || '?')[0].toUpperCase());
 
@@ -441,15 +441,15 @@ function viewHome(el) {
     updatedLine()));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0, recSpent = byMonth(spending().filter((t) => t.manual))[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
-  const pace = paceChart();
+  const bars = monthBars();
   el.append(h('div', { class: 'card tap spendcard', onclick: () => openSheet({ title: 'Spent this month', graph: { type: 'spend', period: '1Y', by: 'month' }, list: () => spending().filter((t) => monthKey(t.date) === m), head: () => h('button', { class: 'btn small', onclick: () => { closePanel(true); showView('categories'); } }, 'By category') }) },
     h('div', { class: 'label' }, 'Spent this month'), num('big', 'spent' + conn, spent, true),
     recSpent ? h('div', { class: 'change muted' }, money(spent - recSpent, true) + ' on cards · ' + money(recSpent, true) + ' recurring') : null,
-    pace ? h('div', { class: 'linewrap' }, pace.svg) : null,
-    pace ? h('div', { class: 'pace-foot' },
-      h('span', { class: pace.diff > 0 ? 'neg' : 'pos' }, `${money(Math.abs(pace.diff))} ${pace.diff > 0 ? 'more' : 'less'} than this time last month`),
-      h('span', { class: 'pace-key' }, h('i', { class: 'k1' }), 'Now', h('i', { class: 'k2' }), 'Last')) : null));
-  setGlow(pace ? -pace.diff : 0);
+    bars ? h('div', { class: 'linewrap' }, bars.svg) : null,
+    bars ? h('div', { class: 'pace-foot' },
+      h('span', { class: 'muted' }, monthName(lastM) + ' ' + money(lastSpent, true)),
+      h('span', { class: 'pace-key' }, h('i', { class: 'kc' }), 'Cards', bars.hasRec ? h('i', { class: 'kr' }) : null, bars.hasRec ? 'Recurring' : null)) : null));
+  setGlow(0);
   const recs = recurring.filter((r) => r.amount > 0), counted = recs.filter((r) => r.count !== false);
   el.append(h('div', { class: 'card list tap', onclick: openRecurringList }, h('h2', {}, 'Recurring payments', h('span', {}, recs.length ? money(perMo(counted), true) + '/mo counted' : '')),
     recs.length ? recs.slice(0, 5).map((r) => recRow(r)) : h('div', { class: 'sub muted' }, 'Add rent, subscriptions or anything else you pay on a schedule.')));
@@ -969,9 +969,17 @@ function fitText() {
 }
 addEventListener('resize', fitText);
 // iOS home-screen apps can start with a too-short viewport until the page scrolls once.
-function nudgeViewport() {
-  for (const t of [50, 300, 900]) setTimeout(() => { const y = scrollY; scrollTo(0, y + 2); requestAnimationFrame(() => scrollTo(0, y)); }, t);
+// Launched from the Home Screen, iOS can lay the page out a status bar short (a gap under the tabs)
+// until it scrolls once. Make the page tall enough to scroll, scroll a hair, and put it back.
+function fixLaunchViewport() {
+  if (!navigator.standalone || scrollY > 2 || innerWidth > innerHeight || innerHeight >= screen.height - 1) return;
+  const b = document.body, prev = b.style.minHeight;
+  b.style.minHeight = `${screen.height + 4}px`; scrollTo(0, 2);
+  requestAnimationFrame(() => requestAnimationFrame(() => { scrollTo(0, 0); b.style.minHeight = prev; }));
 }
+function nudgeViewport() { for (const t of [0, 100, 400, 1000, 2000]) setTimeout(fixLaunchViewport, t); }
+addEventListener('pageshow', fixLaunchViewport);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) nudgeViewport(); });
 function setTab() { for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.view === view); }
 function showView(name) {
   if (name === view) { window.scrollTo({ top: 0, behavior: 'smooth' }); return; }

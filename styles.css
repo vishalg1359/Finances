@@ -382,3 +382,6 @@ svg.bars .b { transform-box: fill-box; transform-origin: bottom; animation: baru
 .pk-split { margin-bottom: 12px; }
 .pk-split .label { margin: 6px 0 8px; }
 .pk-split.muted { font-size: 13px; }
+.pace-key i.kc, .pace-key i.kr { width: 9px; height: 9px; border: 0; border-radius: 2px; background: var(--accent); }
+.pace-key i.kr { background: var(--rec); }
+.chart.mbars { width: 100%; height: auto; display: block; overflow: visible; }
