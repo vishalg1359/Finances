@@ -1,10 +1,10 @@
 'use strict';
-// Finances: talks only to the password-protected Worker; Plaid keys never reach the phone.
+// Analyze: talks only to the password-protected Worker; Plaid keys never reach the phone.
 
 const DEFAULT_SERVER = 'https://finances.vishalg.workers.dev';
 // Settings saved to the server so they follow the account, with a local copy for fast startup.
 let settingsReady = false;
-const SYNCED = ['loans', 'main', 'histDays', 'layout', 'graphs', 'cats', 'sort', 'show'];
+const SYNCED = ['recurring', 'graphs', 'cats', 'sort', 'show'];
 const store = {
   get: (k, d) => { try { const v = localStorage.getItem('fin.' + k); return v == null ? d : JSON.parse(v); } catch (_) { return d; } },
   set: (k, v) => {
@@ -15,7 +15,7 @@ const store = {
 };
 
 let data = store.get('data', null);
-let loans = store.get('loans', []);
+let recurring = store.get('recurring', []);
 let view = 'overview';
 const connBy = store.get('connBy', {});
 let conn = connBy[view] || 'all';
@@ -80,14 +80,13 @@ async function pullSettings() {
     if (s.values[k] == null) localStorage.removeItem('fin.' + k); else localStorage.setItem('fin.' + k, JSON.stringify(s.values[k]));
   }
   localStorage.setItem('fin.settingsAt', s.updated);
-  loans = store.get('loans', []); mainIds = store.get('main', null); histDays = store.get('histDays', 30);
-  layout = store.get('layout', { order: [], size: {}, groups: {} }); cats = store.get('cats', { tx: {}, rules: {} }); txSort = store.get('sort', 'time');
-  graphs = store.get('graphs', null) || DEFAULT_GRAPHS.map((g, i) => ({ id: 'd' + i, period: '1Y', by: 'month', ...g }));
+  recurring = store.get('recurring', []); cats = store.get('cats', { tx: {}, rules: {} }); txSort = store.get('sort', 'time');
+  graphs = loadGraphs();
   render(); if (panel) renderPanel();
 }
 function gotData(d) {
   data = d; store.set('data', d);
-  for (const k in connBy) if (connBy[k] !== 'all' && !d.connections.some((c) => c.item_id === connBy[k])) delete connBy[k];
+  for (const k in connBy) if (connBy[k] !== 'all' && !d.connections.some((c) => c.item_id === connBy[k] && (c.accounts || []).some(isCard))) delete connBy[k];
   conn = connBy[view] || 'all';
   render(); pollIfLoading();
 }
@@ -148,47 +147,28 @@ async function connect(item_id) {
 }
 
 // ---------- derived data ----------
-const shownConns = () => (data ? data.connections.filter((c) => conn === 'all' || c.item_id === conn) : []);
-const allAccounts = () => shownConns().flatMap((c) => (c.accounts || []).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
-// Transfers out and loan payments count as spending unless the money stays yours (another connected account, savings, investing).
+// Only credit cards count. The chips at the top pick one card issuer or all of them.
+const isCard = (a) => a.type === 'credit';
+const cardConns = () => (data ? data.connections.filter((c) => (c.accounts || []).some(isCard)) : []);
+const shownConns = () => cardConns().filter((c) => conn === 'all' || c.item_id === conn);
+const allAccounts = () => shownConns().flatMap((c) => (c.accounts || []).filter(isCard).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
+// Card payments come through as credits under these; charges under them (e.g. Venmo on the card) still count.
 const SPEND_OUT = new Set(['TRANSFER_OUT', 'LOAN_PAYMENTS']);
-const OWN_DETAIL = new Set(['TRANSFER_OUT_SAVINGS', 'TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS']);
-let ownCache = null;
-// Both sides of moves between connected accounts, plus a bank's funding leg of a payment (e.g. Venmo, Zelle) that shows on another connection.
-function ownMoves() {
-  const all = allTxns();
-  if (ownCache && ownCache.src === all) return ownCache.ids;
-  const ids = new Set(), connOf = {}, gap = (a, b) => Math.abs(new Date(a) - new Date(b)) / 864e5;
-  for (const c of data.connections) for (const a of c.accounts || []) connOf[a.account_id] = c.item_id;
-  const insts = data.connections.map((c) => ({ id: c.item_id, key: (c.institution || '').toLowerCase().split(' - ')[0].trim() })).filter((c) => c.key.length > 2);
-  const outs = all.filter((t) => t.amount > 0 && SPEND_OUT.has(t.category)).sort((a, b) => (a.date < b.date ? -1 : 1));
-  for (const t of outs) {
-    if (ids.has(t.id)) continue;
-    const m = all.filter((x) => !ids.has(x.id) && x.account_id !== t.account_id && Math.abs(x.amount + t.amount) < 0.01 && gap(x.date, t.date) <= 5)
-      .sort((x, y) => gap(x.date, t.date) - gap(y.date, t.date))[0];
-    if (m) { ids.add(t.id); ids.add(m.id); continue; }
-    const text = (t.name + ' ' + (t.raw || '')).toLowerCase(), to = insts.find((c) => c.id !== connOf[t.account_id] && text.includes(c.key));
-    if (to && outs.some((x) => connOf[x.account_id] === to.id && Math.abs(x.amount - t.amount) < 0.01 && gap(x.date, t.date) <= 5)) ids.add(t.id);
-  }
-  ownCache = { src: all, ids };
-  return ids;
-}
-const isSpend = (t) => t.category !== 'INCOME' && t.category !== 'TRANSFER_IN' &&
-  (!SPEND_OUT.has(t.category) || (t.amount > 0 && !(!t.origCategory && OWN_DETAIL.has(t.detail)) && !ownMoves().has(t.id)));
+const isSpend = (t) => t.category !== 'INCOME' && t.category !== 'TRANSFER_IN' && !(t.amount < 0 && SPEND_OUT.has(t.category));
 let cats = store.get('cats', { tx: {}, rules: {} }), catsCache = null;
 const allTxns = () => {
   if (!data) return [];
-  if (catsCache && catsCache.src === data.transactions && catsCache.v === cats) return catsCache.out;
-  const out = data.transactions.map((t) => { const c = cats.tx[t.transaction_id] || cats.rules[t.name]; return c && c !== t.category ? { ...t, category: c, origCategory: t.category } : t; });
-  catsCache = { src: data.transactions, v: cats, out };
+  if (catsCache && catsCache.src === data.transactions && catsCache.v === cats && catsCache.r === recurring && catsCache.d === todayISO()) return catsCache.out;
+  const out = data.transactions.concat(recurringTxns()).map((t) => { const c = cats.tx[t.transaction_id] || cats.rules[t.name]; return c && c !== t.category ? { ...t, category: c, origCategory: t.category } : t; });
+  catsCache = { src: data.transactions, v: cats, r: recurring, d: todayISO(), out };
   return out;
 };
-const txns = () => { if (conn === 'all') return allTxns(); const ids = new Set(allAccounts().map((a) => a.account_id)); return allTxns().filter((t) => ids.has(t.account_id)); };
+const txns = () => { const ids = new Set(allAccounts().map((a) => a.account_id)); if (conn === 'all') ids.add('manual'); return allTxns().filter((t) => ids.has(t.account_id)); };
 // Finalized charges only; a refund cancels its matching charge, and partial refunds net against the merchant.
 let spendCache = { key: null, list: [] };
 function spending() {
   const all = txns(), key = (data && data.synced) + '|' + conn + '|' + all.length;
-  if (spendCache.key === key && spendCache.cats === cats) return spendCache.list;
+  if (spendCache.key === key && spendCache.cats === cats && spendCache.r === recurring) return spendCache.list;
   const list = all.filter((t) => !t.pending && isSpend(t));
   const charges = list.filter((t) => t.amount > 0), refunds = list.filter((t) => t.amount < 0), drop = new Set();
   const names = new Set(charges.map((t) => t.name));
@@ -196,20 +176,8 @@ function spending() {
     const c = charges.find((x) => !drop.has(x.id) && x.name === r.name && Math.abs(x.amount + r.amount) < 0.01 && x.date <= r.date && daysBetween(x.date, r.date) <= 120);
     if (c) { drop.add(c.id); drop.add(r.id); }
   }
-  spendCache = { key, cats, list: list.filter((t) => !drop.has(t.id) && (t.amount > 0 || names.has(t.name))) };
+  spendCache = { key, cats, r: recurring, list: list.filter((t) => !drop.has(t.id) && (t.amount > 0 || names.has(t.name))) };
   return spendCache.list;
-}
-const income = () => txns().filter((t) => t.amount < 0 && t.category === 'INCOME');
-
-function totals() {
-  let cash = 0, invest = 0, credit = 0, loan = 0;
-  for (const a of allAccounts()) {
-    const b = a.balances.current || 0;
-    if (a.type === 'depository') cash += b; else if (a.type === 'investment' || a.type === 'brokerage') invest += b;
-    else if (a.type === 'credit') credit += b; else if (a.type === 'loan') loan += b; else cash += b;
-  }
-  const manual = conn === 'all' ? loans.reduce((s, l) => s + loanStatus(l).balance, 0) : 0;
-  return { cash, invest, credit, loan: loan + manual, net: cash + invest - credit - loan - manual };
 }
 function byMonth(list, sign = 1) {
   const m = {};
@@ -225,7 +193,7 @@ function lastMonths(n) {
 const CADENCES = [['Weekly', 7, 5, 9], ['Every 2 weeks', 14, 12, 17], ['Monthly', 30.4, 26, 35], ['Quarterly', 91, 84, 98], ['Yearly', 365, 345, 385]];
 function subscriptions() {
   const groups = {};
-  for (const t of spending().filter((x) => x.amount > 0)) (groups[t.name] = groups[t.name] || []).push(t);
+  for (const t of spending().filter((x) => x.amount > 0 && !x.manual)) (groups[t.name] = groups[t.name] || []).push(t);
   const subs = [];
   for (const [name, list] of Object.entries(groups)) {
     list.sort((a, b) => (a.date < b.date ? 1 : -1));
@@ -241,34 +209,32 @@ function subscriptions() {
   return subs.sort((a, b) => b.monthly - a.monthly);
 }
 
-// ---------- manual loans (e.g. Aidvantage) ----------
-const loanPayments = (l) => {
-  const words = l.match.toLowerCase().split(',').map((s) => s.trim()).filter(Boolean);
-  return allTxns().filter((t) => t.amount > 0 && t.date > l.asOf && words.some((w) => (t.raw + ' ' + t.name).toLowerCase().includes(w)))
-    .sort((a, b) => (a.date < b.date ? -1 : 1));
-};
 const daysBetween = (a, b) => Math.max(0, Math.round((new Date(b + 'T12:00') - new Date(a + 'T12:00')) / 864e5));
-// Federal loans accrue simple daily interest; payments go to interest first, then principal.
-function loanStatus(l) {
-  let bal = l.balance, interest = 0, last = l.asOf, paid = 0;
-  const pays = loanPayments(l);
-  for (const p of pays) {
-    interest += bal * (l.rate / 100 / 365) * daysBetween(last, p.date);
-    const toInterest = Math.min(interest, p.amount);
-    interest -= toInterest; bal = Math.max(0, bal - (p.amount - toInterest));
-    paid += p.amount; last = p.date;
+
+// ---------- recurring payments you enter yourself ----------
+const EVERY = [['weekly', 'Weekly'], ['2weeks', 'Every 2 weeks'], ['monthly', 'Monthly'], ['yearly', 'Yearly']];
+const PER_MONTH = { weekly: 52 / 12, '2weeks': 26 / 12, monthly: 1, yearly: 1 / 12 };
+const everyName = (k) => (EVERY.find((e) => e[0] === k) || [, 'Monthly'])[1];
+const perMo = (l) => l.reduce((s, r) => s + r.amount * (PER_MONTH[r.every] || 1), 0);
+function recurringDates(r, to) {
+  const out = [], end = r.end && r.end < to ? r.end : to;
+  if (!r.start) return out;
+  const [y, m, d] = r.start.split('-').map(Number);
+  for (let i = 0; i < 5000; i++) {
+    let iso;
+    if (r.every === 'weekly' || r.every === '2weeks') iso = shiftDays(r.start, i * (r.every === 'weekly' ? 7 : 14));
+    else { const mm = m - 1 + (r.every === 'yearly' ? 12 * i : i); iso = isoOf(new Date(y, mm, Math.min(d, new Date(y, mm + 1, 0).getDate()))); }
+    if (iso > end) break;
+    out.push(iso);
   }
-  interest += bal * (l.rate / 100 / 365) * daysBetween(last, todayISO());
-  return { balance: bal + interest, pays, paid };
+  return out;
 }
-function payoff(balance, rate, payment) {
-  const r = rate / 100 / 12;
-  if (payment <= balance * r) return null;
-  let months = 0, totalInterest = 0;
-  while (balance > 0 && months < 600) { const i = balance * r; totalInterest += i; balance = balance + i - payment; months++; }
-  const d = new Date(); d.setMonth(d.getMonth() + months);
-  return { months, date: d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }), interest: totalInterest };
-}
+const nextDate = (r) => { const d = recurringDates({ ...r, end: '' }, shiftDays(todayISO(), 400)).find((x) => x > todayISO()); return d && (!r.end || d <= r.end) ? d : null; };
+// Each counted payment becomes a paid transaction on every date it repeats, up to today.
+const recurringTxns = () => recurring.filter((r) => r.count !== false && r.amount > 0).flatMap((r) => recurringDates(r, todayISO()).map((d) => ({
+  id: 'rec:' + r.id + ':' + d, transaction_id: 'rec:' + r.id + ':' + d, account_id: 'manual', manual: true,
+  name: r.name || 'Recurring', amount: r.amount, date: d, category: r.category || 'OTHER', pending: false })));
+const saveRecurring = (l) => { recurring = l; store.set('recurring', recurring); render(); renderPanel(); };
 
 // ---------- charts ----------
 const fullDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: d.slice(0, 4) === todayISO().slice(0, 4) ? undefined : 'numeric' });
@@ -377,9 +343,7 @@ function setGlow(dir) { document.body.style.setProperty('--glow', dir > 0 ? 'rgb
 
 // ---------- shared pieces ----------
 const greeting = () => { const hr = new Date().getHours(); return hr < 5 ? 'Good evening' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening'; };
-const TITLES = { overview: 'Overview', categories: 'Categories', merchants: 'Merchants', paidwith: 'Paid with', graphs: 'Graphs' };
-let mainIds = store.get('main', null);
-const isMain = (a) => (mainIds ? mainIds.includes(a.account_id) : a.subtype === 'checking');
+const TITLES = { overview: 'Home', categories: 'Categories', merchants: 'Merchants', paidwith: 'Paid with', graphs: 'Graphs' };
 const isDebt = (a) => a.type === 'credit' || a.type === 'loan';
 const accLabel = (a) => a.name + (a.mask ? ' ••' + a.mask : '');
 const shortDay = (d) => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -404,7 +368,7 @@ function pickCategory(t) {
     h('div', { class: 'pk-scope' }, h('button', { class: 'chip' + (!all ? ' on' : ''), onclick: () => { all = false; draw(); } }, 'Just this one'),
       h('button', { class: 'chip' + (all ? ' on' : ''), onclick: () => { all = true; draw(); } }, 'All from ' + t.name)),
     h('div', { class: 'pk-list' }, CAT_LIST.map((c) => h('button', { class: 'pk-cat' + (c === t.category ? ' on' : ''), onclick: () => apply(c) },
-      catName(c), c === orig ? h('span', { class: 'muted' }, ' · bank\'s pick') : null, c === 'TRANSFER_IN' || c === 'INCOME' ? h('span', { class: 'muted' }, ' · not spending') : SPEND_OUT.has(c) ? h('span', { class: 'muted' }, ' · spending unless it goes to your own account') : null))),
+      catName(c), c === orig ? h('span', { class: 'muted' }, ' · bank\'s pick') : null, c === 'TRANSFER_IN' || c === 'INCOME' ? h('span', { class: 'muted' }, ' · not spending') : null))),
   ];
   const card = h('div', { class: 'pk-card' }), draw = () => card.replaceChildren(...body());
   const ov = h('div', { class: 'picker', onclick: (e) => { if (e.target === ov) close(); } }, card);
@@ -440,39 +404,21 @@ function noData(el) {
     h('button', { class: 'btn primary', onclick: () => connect() }, 'Connect an account')));
 }
 
-// ---------- Overview ----------
-const PERIODS = [['1W', 7], ['1M', 30], ['3M', 90], ['1Y', 365], ['All', 0]];
-let histDays = store.get('histDays', 30);
-function viewOverview(el) {
-  if (!data || !data.connections.length) { noData(el); if (!loans.length) return; }
+// ---------- Home ----------
+const homeSplit = (posted, p) => h('div', { class: 'split' },
+  h('div', { class: 'splitbar' }, h('i', { class: 'posted', style: `flex:${Math.max(posted, 0.01)}` }), h('i', { class: 'pending', style: `flex:${Math.max(p, 0.01)}` })),
+  h('div', { class: 'splitlegend' },
+    h('div', {}, h('span', { class: 'sw posted' }), h('div', {}, h('b', {}, money(posted, true)), h('small', {}, 'Owed'))),
+    h('div', {}, h('span', { class: 'sw pending' }), h('div', {}, h('b', {}, money(p, true)), h('small', {}, 'Pending'))),
+    h('div', {}, h('div', {}, h('b', {}, money(posted + p, true)), h('small', {}, 'With pending')))));
+function viewHome(el) {
+  if (!data || !data.connections.length) { noData(el); return; }
   { const lb = loadingBanner(); if (lb) el.append(lb); }
-  const accs = allAccounts(), have = accs.filter((a) => !isDebt(a)), owe = accs.filter(isDebt);
-  const sum = (l) => l.reduce((s, a) => s + (a.balances.current || 0), 0);
-  const manual = conn === 'all' ? loans.map((l) => ({ l, bal: loanStatus(l).balance })) : [];
-  const oweTotal = sum(owe) + manual.reduce((s, m) => s + m.bal, 0), net = sum(have) - oweTotal;
-  const full = conn === 'all' && data ? data.history.map((p) => ({ v: p.assets - p.debts, date: p.date })) : [];
-  if (full.length) full[full.length - 1] = { ...full[full.length - 1], v: net };
-  const cut = histDays ? shiftDays(todayISO(), -histDays) : '';
-  const hist = full.filter((p) => p.date >= cut);
-  const delta = hist.length > 1 ? net - hist[0].v : null;
-  setGlow(delta == null ? 0 : delta);
-  const heroNum = num('hero-num', 'net' + conn, net, true);
-  const change = h('div', { class: 'change' });
-  const showChange = () => {
-    change.className = 'change muted';
-    change.textContent = conn === 'all' ? 'Net worth' : (shownConns()[0] || {}).institution || '';
-  };
-  showChange();
-  el.append(h('section', { class: 'hero-block' }, heroNum, change, updatedLine()));
-  const pendingFor = (a) => allTxns().filter((t) => t.pending && t.account_id === a.account_id).sort((x, y) => (x.date < y.date ? 1 : -1));
-  const pendSum = (a) => pendingFor(a).reduce((s, t) => s + t.amount, 0);
-  const owePend = owe.filter((a) => a.type === 'credit').reduce((s, a) => s + pendSum(a), 0);
-  el.append(h('div', { class: 'tiles' },
-    h('div', { class: 'tile tap', onclick: () => { const ids = have.filter(isMain).map((a) => a.account_id); openSheet({ title: have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main accounts', graph: { type: 'balance', accts: ids, period: '6M', by: 'week' }, list: () => allTxns().filter((t) => ids.includes(t.account_id)), head: () => h('button', { class: 'btn small', onclick: () => openPanel('settings') }, 'Choose accounts') }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--good)' }),
-        have.filter(isMain).every((a) => a.subtype === 'checking') ? 'Checking' : 'Main'),
-      num('tile-num', 'chk' + conn, sum(have.filter(isMain)))),
-    h('div', { class: 'tile tap', onclick: () => { const cards = owe.filter((a) => a.type === 'credit'), ids = cards.map((a) => a.account_id); openSheet({ title: 'Credit cards', list: () => owedTxns(true).filter((t) => ids.includes(t.account_id)), head: () => split(sum(cards), owePend) }); } }, h('div', { class: 'label' }, h('span', { class: 'dot', style: 'background:var(--bad)' }), 'You owe'),
-      num('tile-num', 'owe' + conn, sum(owe.filter((a) => a.type === 'credit'))), owePend ? h('div', { class: 'tile-pend' }, (owePend < 0 ? '−' : '+') + money(Math.abs(owePend), true) + ' pending') : null)));
+  const cards = allAccounts(), ids = new Set(cards.map((a) => a.account_id)), owed = cards.reduce((s, a) => s + (a.balances.current || 0), 0);
+  const pend = allTxns().filter((t) => t.pending && ids.has(t.account_id)).reduce((s, t) => s + t.amount, 0);
+  el.append(h('section', { class: 'hero-block tap', onclick: () => openSheet({ title: 'You owe', list: () => owedTxns(true).filter((t) => ids.has(t.account_id)), head: () => homeSplit(owed, pend) }) },
+    h('div', { class: 'label' }, 'You owe'), num('hero-num', 'owe' + conn, owed, true),
+    pend ? h('div', { class: 'change muted' }, (pend < 0 ? '−' : '+') + money(Math.abs(pend), true) + ' pending') : null, updatedLine()));
   const m = monthKey(todayISO()), spent = byMonth(spending())[m] || 0;
   const lastM = lastMonths(2)[0], lastSpent = byMonth(spending())[lastM] || 0;
   const pace = paceChart();
@@ -482,125 +428,49 @@ function viewOverview(el) {
     pace ? h('div', { class: 'pace-foot' },
       h('span', { class: pace.diff > 0 ? 'neg' : 'pos' }, `${money(Math.abs(pace.diff))} ${pace.diff > 0 ? 'more' : 'less'} than this time last month`),
       h('span', { class: 'pace-key' }, h('i', { class: 'k1' }), 'Now', h('i', { class: 'k2' }), 'Last')) : null));
-  const split = (posted, p) => h('div', { class: 'split' },
-    h('div', { class: 'splitbar' }, h('i', { class: 'posted', style: `flex:${Math.max(posted, 0.01)}` }), h('i', { class: 'pending', style: `flex:${Math.max(p, 0.01)}` })),
-    h('div', { class: 'splitlegend' },
-      h('div', {}, h('span', { class: 'sw posted' }), h('div', {}, h('b', {}, money(posted, true)), h('small', {}, 'Owed'))),
-      h('div', {}, h('span', { class: 'sw pending' }), h('div', {}, h('b', {}, money(p, true)), h('small', {}, 'Pending'))),
-      h('div', {}, h('div', {}, h('b', {}, money(posted + p, true)), h('small', {}, 'With pending')))));
-  // Vaults (e.g. SoFi) come through as "cash management" accounts next to an empty parent savings account.
-  const vaultBanks = new Set(accs.filter((a) => a.subtype === 'savings').map((a) => a.institution));
-  const isVault = (a) => a.subtype === 'cash management' && vaultBanks.has(a.institution);
-  const hasVaults = new Set(accs.filter(isVault).map((a) => a.institution));
-  const emptyParent = (a) => a.subtype === 'savings' && hasVaults.has(a.institution) && !a.balances.current;
-  const alloc = [['Checking', (a) => a.subtype === 'checking', 'var(--good)'], ['Savings', (a) => a.subtype === 'savings' || isVault(a), '#4f8cff'],
-    ['Investments', (a) => a.type === 'investment' || a.type === 'brokerage', '#a37bff']]
-    .map(([l, f, c]) => ({ l, c, v: sum(have.filter(f)) })).filter((x) => x.v > 0);
-  const allocTotal = alloc.reduce((s, x) => s + x.v, 0);
-  if (alloc.length > 1) el.append(h('div', { class: 'card alloc tap', onclick: () => { const ids = have.map((a) => a.account_id); openSheet({ title: 'Money you have', graph: { type: 'balance', accts: ids, period: '1Y', by: 'week' }, list: () => allTxns().filter((t) => ids.includes(t.account_id)) }); } },
-    h('div', { class: 'allocbar' }, alloc.map((x) => h('i', { style: `flex:${x.v};background:${x.c}` }))),
-    h('div', { class: 'allockey' }, alloc.map((x) => h('span', {}, h('i', { style: `background:${x.c}` }), x.l, h('b', {}, Math.round((x.v / allocTotal) * 100) + '%'))))));
-  if (accs.length || manual.length) el.append(accountGrid(accs.filter((a) => !emptyParent(a)), manual, pendingFor, split));
+  setGlow(pace ? -pace.diff : 0);
+  const recs = recurring.filter((r) => r.amount > 0), counted = recs.filter((r) => r.count !== false);
+  el.append(h('div', { class: 'card list tap', onclick: openRecurringList }, h('h2', {}, 'Recurring payments', h('span', {}, recs.length ? money(perMo(counted), true) + '/mo counted' : '')),
+    recs.length ? recs.slice(0, 5).map((r) => recRow(r)) : h('div', { class: 'sub muted' }, 'Add rent, subscriptions or anything else you pay on a schedule.')));
 }
-
-
-// ---------- account boxes (Overview) ----------
-let layout = store.get('layout', { order: [], size: {}, groups: {} });
-let editing = false, picked = new Set(), dragId = null;
-const saveLayout = () => store.set('layout', layout);
-const SIZES = [[1, 1], [2, 1], [1, 2], [2, 2]];
-const typeRank = (a) => (a.subtype === 'checking' ? 0 : ['savings', 'cash management'].includes(a.subtype) ? 1 : ['investment', 'brokerage'].includes(a.type) ? 2 : a.type === 'credit' ? 3 : a.type === 'loan' ? 4 : 5);
-function accountGrid(accs, manual, pendingFor, split) {
-  const items = {};
-  for (const a of accs) items[a.account_id] = { id: a.account_id, a, name: a.name, value: a.balances.current || 0, debt: isDebt(a), rank: typeRank(a),
-    pend: a.type === 'credit' ? pendingFor(a).reduce((s, t) => s + t.amount, 0) : 0, mark: mark(a.brand, a.institution), sub: (a.mask ? '••' + a.mask : '') };
-  for (const { l, bal } of manual) items['loan:' + l.id] = { id: 'loan:' + l.id, loan: l, name: l.name, value: bal, debt: true, rank: 4, pend: 0, mark: mark(null, l.name), sub: 'estimated' };
-  const subs = subscriptions();
-  if (subs.length) items.recurring = { id: 'recurring', special: true, name: 'Recurring', value: subs.reduce((t, x) => t + x.monthly, 0), pend: 0, rank: 6, perMo: true,
-    mark: h('div', { class: 'bank', style: 'background:#a37bff' }, h('svg', { viewBox: '0 0 24 24', html: '<path d="M20 12a8 8 0 1 1-2.34-5.66M20 4v4h-4" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>' })), sub: subs.length + ' subscriptions', subs };
-  const inGroup = new Set(Object.values(layout.groups).flatMap((g) => g.members));
-  for (const id of Object.keys(items).sort((x, y) => items[x].rank - items[y].rank)) if (!layout.order.includes(id)) layout.order.push(id);
-  for (const [gid, g] of Object.entries(layout.groups)) {
-    const ms = g.members.map((m) => items[m]).filter(Boolean);
-    if (!ms.length) continue;
-    const net = ms.reduce((s, m) => s + (m.debt ? -m.value : m.value), 0);
-    items['g:' + gid] = { id: 'g:' + gid, gid, group: g, members: ms, name: g.name, value: Math.abs(net), debt: net < 0, pend: ms.reduce((s, m) => s + m.pend, 0),
-      mark: h('div', { class: 'stack' }, ms.slice(0, 3).map((m) => m.mark.cloneNode(true))), sub: ms.length + ' accounts' };
-  }
-  saveLayout();
-  const tiles = () => layout.order.filter((id) => items[id] && !inGroup.has(id));
-  const wrap = h('div', { class: 'agrid-wrap' });
-  const recent = (ids, n) => allTxns().filter((t) => ids.includes(t.account_id)).sort((x, y) => (x.date < y.date ? 1 : -1)).slice(0, n);
-  const idsOf = (t) => (t.members ? t.members.map((m) => m.id) : [t.id]);
-  const extra = (t) => t.members
-    ? h('div', { class: 'mini' }, t.members.slice(0, 4).map((m) => h('div', {}, h('span', {}, m.name), h('b', { class: m.debt ? 'neg' : '' }, money(m.value)))))
-    : t.subs ? h('div', { class: 'mini' }, t.subs.slice(0, 4).map((x) => h('div', {}, h('span', {}, x.name), h('b', {}, money(x.amount)))))
-    : t.loan ? null : h('div', { class: 'mini' }, recent([t.id], 3).map((x) => h('div', {}, h('span', {}, x.name), h('b', { class: x.amount < 0 ? 'pos' : 'neg' }, (x.amount < 0 ? '+' : '−') + money(Math.abs(x.amount))))));
-  const tileEl = (t) => {
-    const [w, hh] = layout.size[t.id] || [1, 1];
-    const onclick = () => {
-      if (editing) { picked.has(t.id) ? picked.delete(t.id) : picked.add(t.id); draw(); return; }
-      if (t.loan) return openPanel('loans');
-      if (t.subs) return openRecurring();
-      openSheet({ title: t.name, graph: { type: 'balance', accts: idsOf(t), period: '6M', by: 'week', title: t.name }, list: () => recent(idsOf(t), 1e9),
-        head: () => t.members ? h('div', { class: 'card list' }, t.members.map((m) => h('div', { class: 'row' }, m.mark.cloneNode(true), h('div', { class: 'grow' }, h('div', { class: 'name' }, m.name)), h('div', { class: 'amt' + (m.debt ? ' neg' : '') }, money(m.value, true)))))
-          : t.a && t.a.type === 'credit' && t.pend ? split(t.value, t.pend) : null });
-    };
-    return h('div', { class: 'atile' + (editing ? ' editing' : '') + (picked.has(t.id) ? ' picked' : '') + (dragId === t.id ? ' dragging' : '') + (t.members ? ' group' : ''),
-      'data-id': t.id, style: `grid-column:span ${w};grid-row:span ${hh}`, onclick },
-      h('div', { class: 'atile-top' }, t.mark, h('div', { class: 'atile-name' }, t.name)),
-      h('div', { class: 'atile-amt fit' + (t.debt ? ' neg' : '') + (w === 2 ? ' wide' : '') }, money(t.value, w === 2 && !t.perMo), t.perMo ? h('small', { class: 'permo' }, '/mo') : null),
-      t.pend ? h('div', { class: 'pend-amt' }, (t.pend < 0 ? '−' : '+') + money(Math.abs(t.pend), true) + ' pending') : h('div', { class: 'atile-sub' }, t.sub),
-      hh === 2 ? extra(t) : null,
-      editing ? h('button', { class: 'tbtn size', 'aria-label': 'Resize', onclick: (e) => { e.stopPropagation(); const i = SIZES.findIndex(([a, b]) => a === w && b === hh); layout.size[t.id] = SIZES[(i + 1) % SIZES.length]; saveLayout(); draw(); } },
-        h('svg', { viewBox: '0 0 24 24', html: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>' })) : null,
-      editing ? h('div', { class: 'tbtn handle', 'aria-label': 'Move', onpointerdown: (e) => startDrag(e, t.id) }, h('svg', { viewBox: '0 0 24 24', html: '<g fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></g>' })) : null);
-  };
-  const startDrag = (e, id) => {
-    e.preventDefault(); e.stopPropagation(); dragId = id;
-    const tile = e.currentTarget.closest('.atile'), grid = tile.parentNode;
-    tile.classList.add('dragging');
-    const move = (ev) => {
-      if (ev.clientY < 110) scrollBy(0, -12); else if (ev.clientY > innerHeight - 140) scrollBy(0, 12);
-      const under = document.elementFromPoint(ev.clientX, ev.clientY), tgt = under && under.closest('.atile');
-      if (!tgt || tgt === tile || tgt.parentNode !== grid) return;
-      const kids = [...grid.children], after = kids.indexOf(tile) < kids.indexOf(tgt);
-      grid.insertBefore(tile, after ? tgt.nextSibling : tgt);
-    };
-    const up = () => {
-      removeEventListener('pointermove', move); removeEventListener('pointerup', up); removeEventListener('pointercancel', up);
-      const shown = [...grid.children].map((n) => n.dataset.id), slots = layout.order.map((x, i) => (shown.includes(x) ? i : -1)).filter((i) => i >= 0);
-      slots.forEach((slot, k) => { layout.order[slot] = shown[k]; });
-      dragId = null; saveLayout(); draw();
-    };
-    addEventListener('pointermove', move); addEventListener('pointerup', up); addEventListener('pointercancel', up);
-  };
-  const groupPicked = () => {
-    const sel = [...picked].map((id) => items[id]).filter((t) => t && !t.special), name = prompt('Name this group', sel.find((t) => t.group)?.name || 'Group');
-    if (name == null) return;
-    const members = [...new Set(sel.flatMap((t) => (t.members ? t.members.map((m) => m.id) : [t.id])))];
-    for (const t of sel) if (t.gid) delete layout.groups[t.gid];
-    const gid = Date.now().toString(36), at = Math.min(...sel.map((t) => layout.order.indexOf(t.id)).filter((i) => i >= 0));
-    layout.groups[gid] = { name: name.trim() || 'Group', members }; layout.order.splice(at, 0, 'g:' + gid); layout.size['g:' + gid] = [2, 1];
-    picked.clear(); saveLayout(); render();
-  };
-  const ungroup = () => { for (const id of picked) if (items[id] && items[id].gid) delete layout.groups[items[id].gid]; picked.clear(); saveLayout(); render(); };
-  const rename = () => { const t = items[[...picked][0]], n = prompt('Rename group', t.name); if (n) { layout.groups[t.gid].name = n.trim() || t.name; saveLayout(); render(); } };
-  const draw = () => {
-    const sel = [...picked].map((id) => items[id]).filter((t) => t && !t.special), groupsSel = sel.filter((t) => t.gid);
-    wrap.replaceChildren(...[
-      h('div', { class: 'sechead' }, h('h2', {}, 'Accounts'), h('button', { class: 'edit-btn' + (editing ? ' on' : ''), onclick: () => { editing = !editing; picked.clear(); render(); } }, editing ? 'Done' : 'Edit')),
-      editing ? h('div', { class: 'edit-hint' }, 'Drag ⠿ to move · ⤢ to resize · tap boxes to select') : null,
-      h('div', { class: 'agrid' }, tiles().map((id) => tileEl(items[id]))),
-      editing ? h('div', { class: 'editbar' },
-        h('button', { class: 'btn', disabled: sel.length < 2 ? true : null, onclick: groupPicked }, sel.length >= 2 ? `Group ${sel.length}` : 'Group'),
-        groupsSel.length ? h('button', { class: 'btn', onclick: ungroup }, 'Ungroup') : null,
-        groupsSel.length === 1 && sel.length === 1 ? h('button', { class: 'btn', onclick: rename }, 'Rename') : null,
-        h('button', { class: 'btn primary', onclick: () => { editing = false; picked.clear(); render(); } }, 'Done')) : null].filter(Boolean));
-    fitText();
-  };
-  draw();
-  return wrap;
+const recRow = (r, extra) => { const k = r.category || 'OTHER', nx = nextDate(r);
+  return h('div', { class: 'row' }, catBadge({ k, color: catColor(k) }),
+    h('div', { class: 'grow' }, h('div', { class: 'name' }, r.name), h('div', { class: 'sub' }, everyName(r.every) + (nx ? ' · next ' + shortDay(nx) : ' · ended') + (r.count === false ? ' · not counted' : ''))),
+    h('div', { class: 'amt' }, money(r.amount, true)), extra || null); };
+function openRecurringList() {
+  openSheet({ title: 'Recurring payments', render: (el) => {
+    const counted = recurring.filter((r) => r.count !== false);
+    if (recurring.length) el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Counted in spending'), h('div', { class: 'big' }, money(perMo(counted), true), h('small', { class: 'permo' }, '/mo')),
+      h('div', { class: 'sub muted' }, `${counted.length} of ${recurring.length} counted · ${money(perMo(recurring), true)}/mo in all`)));
+    if (recurring.length) el.append(h('div', { class: 'card list' }, recurring.map((r) => {
+      const row = recRow(r, h('input', { type: 'checkbox', class: 'switch', 'aria-label': 'Count in spending', checked: r.count !== false ? true : null, onclick: (e) => e.stopPropagation(),
+        onchange: (e) => saveRecurring(recurring.map((x) => (x.id === r.id ? { ...x, count: e.target.checked } : x))) }));
+      row.classList.add('tap'); row.onclick = () => recurringForm(el, r); return row; })));
+    else el.append(h('div', { class: 'empty small' }, 'Nothing added yet'));
+    el.append(h('button', { class: 'btn primary', onclick: () => recurringForm(el) }, '+ Add recurring payment'));
+    el.append(h('p', { class: 'muted', style: 'font-size:13px' }, 'Counted payments show up as Paid on each date they repeat, in Categories, Merchants, Paid with and Graphs. Turn the switch off to keep one listed without adding it to your totals.'));
+  } });
+}
+function recurringForm(el, existing) {
+  const r = existing ? { ...existing } : { id: Date.now().toString(36), name: '', amount: '', every: 'monthly', start: todayISO().slice(0, 8) + '01', end: '', category: 'RENT_AND_UTILITIES', count: true };
+  const f = (label, key, type, extra = {}) => h('div', { class: 'field' }, h('label', {}, label), h('input', { type, value: r[key] ?? '', step: type === 'number' ? 'any' : null, inputmode: type === 'number' ? 'decimal' : null,
+    oninput: (e) => { r[key] = type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value; }, ...extra }));
+  const chips = (opts, key) => { const box = h('div', { class: 'presets wrap' }), draw = () => box.replaceChildren(...opts.map(([v, l]) => h('button', { class: 'chip' + (r[key] === v ? ' on' : ''), onclick: () => { r[key] = v; draw(); } }, l))); draw(); return box; };
+  el.replaceChildren(h('div', { class: 'card' }, h('h2', {}, existing ? 'Edit recurring payment' : 'Add a recurring payment'),
+    f('Name', 'name', 'text', { placeholder: 'Rent' }), f('Amount', 'amount', 'number', { placeholder: '0.00' }),
+    h('div', { class: 'label' }, 'Repeats'), chips(EVERY, 'every'),
+    f('First payment', 'start', 'date'), f('Last payment (optional)', 'end', 'date'),
+    h('div', { class: 'label' }, 'Category'), chips(CAT_LIST.map((c) => [c, catName(c)]), 'category'),
+    h('label', { class: 'row tap' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, 'Count in spending'), h('div', { class: 'sub' }, 'Adds it to your totals and graphs')),
+      h('input', { type: 'checkbox', class: 'switch', checked: r.count !== false ? true : null, onchange: (e) => { r.count = e.target.checked; } })),
+    h('button', { class: 'btn primary', onclick: () => {
+      r.name = String(r.name || '').trim();
+      if (!r.name || !(r.amount > 0) || !r.start) return toast('Add a name, an amount and a first payment date.');
+      if (r.end && r.end < r.start) r.end = '';
+      saveRecurring(recurring.some((x) => x.id === r.id) ? recurring.map((x) => (x.id === r.id ? r : x)) : recurring.concat(r));
+    } }, 'Save'),
+    existing ? h('button', { class: 'btn danger', onclick: () => saveRecurring(recurring.filter((x) => x.id !== r.id)) }, 'Delete') : null,
+    h('button', { class: 'btn', onclick: renderPanel }, 'Cancel')));
 }
 
 // ---------- date range (spending tabs) ----------
@@ -757,23 +627,24 @@ function viewMerchants(el) {
 }
 function viewPaidWith(el) {
   const accs = Object.fromEntries(allAccounts().map((a) => [a.account_id, a]));
-  breakdown(el, (t) => t.account_id, (k) => (accs[k] ? accLabel(accs[k]) : 'Other'), 'cards', null);
+  breakdown(el, (t) => t.account_id, (k) => (accs[k] ? accLabel(accs[k]) : k === 'manual' ? 'Recurring payments' : 'Other'), 'cards', null);
 }
 
 // ---------- graphs ----------
-const GTYPES = [['spend', 'Spending'], ['income', 'Money in'], ['inout', 'Income vs spending'], ['balance', 'Balance'], ['networth', 'Net worth']];
+const GTYPES = [['spend', 'Spending']];
 const ago = (n) => ({ from: shiftDays(todayISO(), -n + 1), to: todayISO() });
 const GPERIODS = [
   ['month', 'This month', thisMonthRangeG], ['lastmonth', 'Last month', () => { const f = shiftDays(todayISO().slice(0, 8) + '01', -1).slice(0, 8) + '01'; return { from: f, to: shiftDays(todayISO().slice(0, 8) + '01', -1) }; }],
   ['ytd', 'This year', () => ({ from: todayISO().slice(0, 4) + '-01-01', to: todayISO() })],
   ['3M', '3M', () => ago(92)], ['6M', '6M', () => ago(183)], ['1Y', '1Y', () => ago(365)], ['2Y', '2Y', () => ago(730)],
-  ['all', 'All', () => ({ from: allTxns().reduce((m, t) => (t.date < m ? t.date : m), todayISO()), to: todayISO() })]];
+  ['all', 'All', () => ({ from: txns().reduce((m, t) => (t.date < m ? t.date : m), todayISO()), to: todayISO() })]];
 function thisMonthRangeG() { return { from: todayISO().slice(0, 8) + '01', to: todayISO() }; }
 const GBY = [['day', 'Day'], ['week', 'Week'], ['month', 'Month']];
-const DEFAULT_GRAPHS = [{ type: 'spend' }, { type: 'inout' }, { type: 'spend', cat: 'FOOD_AND_DRINK' }, { type: 'spend', cat: 'RENT_AND_UTILITIES' }, { type: 'networth' }];
-let graphs = store.get('graphs', null) || DEFAULT_GRAPHS.map((g, i) => ({ id: 'd' + i, period: '1Y', by: 'month', ...g }));
+const DEFAULT_GRAPHS = [{ type: 'spend' }, { type: 'spend', cat: 'FOOD_AND_DRINK' }, { type: 'spend', cat: 'GENERAL_MERCHANDISE' }, { type: 'spend', cat: 'TRANSPORTATION' }];
+function loadGraphs() { const saved = store.get('graphs', null); return saved ? saved.filter((g) => g.type === 'spend') : DEFAULT_GRAPHS.map((g, i) => ({ id: 'd' + i, period: '1Y', by: 'month', ...g })); }
+let graphs = loadGraphs();
 const saveGraphs = () => store.set('graphs', graphs);
-const everyAccount = () => (data ? data.connections : []).flatMap((c) => (c.accounts || []).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
+const everyAccount = () => cardConns().flatMap((c) => (c.accounts || []).filter(isCard).map((a) => ({ ...a, institution: c.institution, brand: c.brand })));
 const weekStart = (iso) => { const d = new Date(iso + 'T12:00'); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return isoOf(d); };
 const bucketOf = (by, iso) => (by === 'month' ? monthKey(iso) : by === 'week' ? weekStart(iso) : iso);
 const bucketEnd = (by, k, to = todayISO()) => {
@@ -796,27 +667,6 @@ function bucketKeys(g) {
   if (keys.length < 3 && by === 'week') keys = make((by = 'day'));
   return { keys, by, from, to };
 }
-// Past balances: saved daily snapshots when we have them, otherwise worked backwards from today's balance through posted transactions.
-function balanceAt(ids) {
-  const accs = everyAccount().filter((a) => ids.includes(a.account_id)), allDebt = accs.every(isDebt);
-  const snaps = new Map((data.history || []).filter((p) => p.accounts).map((p) => [p.date, p.accounts]));
-  const posted = allTxns().filter((t) => !t.pending);
-  const per = accs.map((a) => {
-    const list = posted.filter((t) => t.account_id === a.account_id), firstSnap = [...snaps.keys()].find((d) => snaps.get(d)[a.account_id] != null);
-    const oldest = [list.length ? list[list.length - 1].date : null, firstSnap].filter(Boolean).sort()[0] || todayISO();
-    return { a, list, oldest, sign: isDebt(a) ? -1 : 1 };
-  });
-  return (day) => {
-    let total = 0, any = false;
-    for (const { a, list, oldest, sign } of per) {
-      if (day < oldest) continue;
-      const snap = snaps.get(day);
-      let v = snap && snap[a.account_id] != null ? snap[a.account_id] : (a.balances.current || 0) + sign * list.reduce((s, t) => s + (t.date > day ? t.amount : 0), 0);
-      any = true; total += allDebt ? v : isDebt(a) ? -v : v;
-    }
-    return any ? total : null;
-  };
-}
 const gCats = (g) => g.cats || (g.cat ? [g.cat] : []);
 const gMerch = (g) => g.merchants || (g.merchant ? [g.merchant] : []);
 function series(g) {
@@ -828,28 +678,19 @@ function series(g) {
     return v;
   };
   const base = { keys, by, from, to, kind: 'bars' };
-  if (g.type === 'spend') {
-    const cs = new Set(gCats(g)), ms = new Set(gMerch(g)), any = !cs.size && !ms.size;
-    const c = cs.size === 1 && !ms.size ? catColor([...cs][0]) : '#ff5a5f';
-    return { ...base, sets: [{ c, v: sumBy(spending().filter((t) => any || cs.has(t.category) || ms.has(t.name)), 1) }] };
-  }
-  if (g.type === 'income') return { ...base, sets: [{ c: '#1fd286', v: sumBy(income(), -1) }] };
-  if (g.type === 'inout') return { ...base, sets: [{ c: '#1fd286', l: 'Income', v: sumBy(income(), -1) }, { c: '#ff5a5f', l: 'Spending', v: sumBy(spending(), 1) }] };
-  if (g.type === 'networth') {
-    const hist = (data.history || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
-    return { ...base, kind: 'line', sets: [{ v: keys.map((k) => { const e = bucketEnd(by, k, to); let last = null; for (const p of hist) if (p.date <= e) last = p.assets - p.debts; return last; }) }] };
-  }
-  const at = balanceAt(ids ? [...ids] : allAccounts().filter((a) => !isDebt(a)).map((a) => a.account_id));
-  return { ...base, kind: 'line', sets: [{ v: keys.map((k) => at(bucketEnd(by, k, to))) }] };
+  const cs = new Set(gCats(g)), ms = new Set(gMerch(g)), any = !cs.size && !ms.size;
+  const c = cs.size === 1 && !ms.size ? catColor([...cs][0]) : '#ff5a5f';
+  return { ...base, sets: [{ c, v: sumBy(shownTxns(gShow(g), { from, to }).filter((t) => any || cs.has(t.category) || ms.has(t.name)), 1) }] };
 }
+const gShow = (g) => g.show || { paid: true, unpaid: true, pending: false };
+const gShowLabel = (g) => { const s = gShow(g); return s.paid && s.unpaid && !s.pending ? '' : ['paid', 'unpaid', 'pending'].filter((k) => s[k]).map((k) => k[0].toUpperCase() + k.slice(1)).join(' + '); };
 function gTitle(g) {
   if (g.title) return g.title;
   const accs = (g.accts || []).map((id) => everyAccount().find((a) => a.account_id === id)).filter(Boolean);
   const an = accs.length === 1 ? accs[0].name : accs.length ? accs.length + ' accounts' : '';
   const items = [...gCats(g).map(catName), ...gMerch(g)];
   const base = g.type === 'spend' ? (!items.length ? 'Spending' : items.slice(0, 2).join(' + ') + (items.length > 2 ? ` +${items.length - 2}` : '')) : (GTYPES.find((t) => t[0] === g.type) || [, ''])[1];
-  if (g.type === 'balance') return an || 'Money you have';
-  return an && g.type !== 'networth' ? base + ' · ' + an : base;
+  return [base, an, gShowLabel(g)].filter(Boolean).join(' · ');
 }
 function linesChart(s, onScrub) {
   const W = 340, H = 130, n = s.keys.length, max = Math.max(1, ...s.sets.flatMap((x) => x.v)) * 1.08;
@@ -927,7 +768,9 @@ function openGraphEditor(orig, preset) {
     el.append(prev);
     el.append(h('div', { class: 'card' }, h('div', { class: 'field' }, h('label', {}, 'Name'),
       h('input', { type: 'text', value: f.title || '', placeholder: gTitle({ ...f, title: '' }), oninput: (e) => { f.title = e.target.value.trim() || undefined; refresh(); } }))));
-    el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Show'), chips(GTYPES, 'type')));
+    { const sh = gShow(f);
+      el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, 'Include'), h('div', { class: 'presets wrap' }, [['paid', 'Paid'], ['unpaid', 'Unpaid'], ['pending', 'Pending']].map(([k, l]) =>
+        h('button', { class: 'chip' + (sh[k] ? ' on' : ''), onclick: () => { const n = { ...sh, [k]: !sh[k] }; if (n.paid || n.unpaid || n.pending) { f.show = n; renderPanel(); } } }, l))))); }
     if (f.type === 'spend') {
       const tot = {}; for (const t of spending()) if (t.amount > 0) { tot['c' + t.category] = (tot['c' + t.category] || 0) + t.amount; tot['m' + t.name] = (tot['m' + t.name] || 0) + t.amount; }
       const top = (p) => Object.keys(tot).filter((k) => k[0] === p).sort((a, b) => tot[b] - tot[a]).map((k) => k.slice(1));
@@ -949,9 +792,9 @@ function openGraphEditor(orig, preset) {
       el.append(h('div', { class: 'card' }, head, h('div', { class: 'field' },
         h('input', { type: 'search', placeholder: 'Search merchants or categories', oninput: (e) => { q.v = e.target.value; draw(); } })), list));
     }
-    if (f.type !== 'networth') {
-      const accs = everyAccount().filter((a) => (f.type === 'balance' ? true : f.type === 'income' ? !isDebt(a) : true));
-      el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, f.accts.length ? 'Accounts' : 'Accounts · all'),
+    if (everyAccount().length > 1) {
+      const accs = everyAccount();
+      el.append(h('div', { class: 'card' }, h('div', { class: 'label' }, f.accts.length ? 'Cards' : 'Cards · all'),
         accs.map((a) => h('label', { class: 'row tap' }, mark(a.brand, a.institution), h('div', { class: 'grow' }, h('div', { class: 'name' }, a.name, h('span', { class: 'mask' }, ' ' + (a.mask || ''))), h('div', { class: 'sub' }, a.institution || '')),
           h('input', { type: 'checkbox', class: 'switch', checked: f.accts.includes(a.account_id) ? true : null,
             onchange: (e) => { f.accts = e.target.checked ? [...f.accts, a.account_id] : f.accts.filter((x) => x !== a.account_id); renderPanel(); } })))));
@@ -1024,7 +867,7 @@ function openRecurring() {
   } });
 }
 
-// ---------- panels: settings + loans ----------
+// ---------- panels: settings ----------
 let panel = null;
 function openPanel(name) { panel = name; $('panel').hidden = false; $('panel').classList.remove('closing'); renderPanel(); }
 function closePanel(instant) {
@@ -1036,48 +879,9 @@ function closePanel(instant) {
 function renderPanel() {
   if (!panel) return;
   const el = $('panel-body'); el.replaceChildren();
-  $('panel-title').textContent = panel === 'txns' ? sheet.title : panel === 'loans' ? 'Loans' : 'Settings';
-  $('panel-back').onclick = () => (panel === 'loans' ? openPanel('settings') : closePanel());
-  (panel === 'txns' ? viewSheet : panel === 'loans' ? viewLoans : viewSettings)(el);
-}
-function loanForm(el, existing) {
-  const l = existing || { id: Date.now().toString(36), name: 'Aidvantage', balance: '', rate: '', payment: '', asOf: todayISO(), match: 'aidvantage, dept education, dept of ed' };
-  const f = (label, key, type) => h('div', { class: 'field' }, h('label', {}, label),
-    h('input', { type, step: 'any', value: l[key], 'data-k': key, inputmode: type === 'number' ? 'decimal' : null }));
-  const card = h('div', { class: 'card' }, h('h2', {}, existing ? 'Edit loan' : 'Add a loan'),
-    f('Name', 'name', 'text'), f('Balance on that date', 'balance', 'number'), f('As of', 'asOf', 'date'),
-    f('Interest rate (%)', 'rate', 'number'), f('Monthly payment', 'payment', 'number'),
-    f('Payment names to look for (comma separated)', 'match', 'text'),
-    h('button', { class: 'btn primary', onclick: () => {
-      for (const i of card.querySelectorAll('input')) l[i.dataset.k] = i.type === 'number' ? parseFloat(i.value) || 0 : i.value;
-      loans = loans.filter((x) => x.id !== l.id).concat(l); store.set('loans', loans); renderPanel(); render();
-    } }, 'Save'),
-    existing ? h('button', { class: 'btn danger', onclick: () => { loans = loans.filter((x) => x.id !== l.id); store.set('loans', loans); renderPanel(); render(); } }, 'Delete') : null,
-    h('button', { class: 'btn', onclick: renderPanel }, 'Cancel'));
-  el.replaceChildren(card);
-}
-function viewLoans(el) {
-  const plaidLoans = data ? data.connections.flatMap((c) => ((c.liabilities && c.liabilities.student) || []).map((s) => ({ s, acc: (c.accounts || []).find((a) => a.account_id === s.account_id) }))) : [];
-  for (const { s, acc } of plaidLoans) {
-    const bal = (acc && acc.balances.current) || 0, p = payoff(bal, s.interest_rate_percentage || 0, s.minimum_payment_amount || 0);
-    el.append(h('div', { class: 'card' }, h('h2', {}, (acc && acc.name) || s.loan_name || 'Student loan'), h('div', { class: 'big' }, money(bal, true)),
-      h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Rate'), h('div', {}, (s.interest_rate_percentage || 0) + '%')),
-      h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Payment'), h('div', {}, money(s.minimum_payment_amount || 0, true))),
-      s.next_payment_due_date ? h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Next due'), h('div', {}, dayName(s.next_payment_due_date))) : null,
-      p ? h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Paid off'), h('div', {}, p.date)) : null));
-  }
-  for (const l of loans) {
-    const st = loanStatus(l), p = payoff(st.balance, l.rate, l.payment);
-    el.append(h('div', { class: 'card tap', onclick: () => loanForm(el, l) }, h('h2', {}, l.name), h('div', { class: 'big' }, money(st.balance, true)),
-      h('div', { class: 'sub muted' }, `Estimated from ${money(l.balance, true)} on ${dayName(l.asOf)}`),
-      h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Rate'), h('div', {}, l.rate + '%')),
-      h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Payments found since'), h('div', {}, `${st.pays.length} · ${money(st.paid, true)}`)),
-      p ? h('div', { class: 'row' }, h('div', { class: 'grow' }, 'Paid off'), h('div', {}, `${p.date} · ${money(p.interest)} interest left`))
-        : h('div', { class: 'warn' }, 'Payment doesn’t cover the interest, so this never pays off.'),
-      daysBetween(l.asOf, todayISO()) > 180 ? h('div', { class: 'warn' }, 'Over 6 months old: tap to update the balance from your Aidvantage account.') : null));
-  }
-  if (!plaidLoans.length && !loans.length) el.append(h('div', { class: 'empty' }, 'Aidvantage can’t connect through Plaid, so add each loan once. Payments to it in your bank are picked up automatically.'));
-  el.append(h('button', { class: 'btn primary', onclick: () => loanForm(el) }, '+ Add a loan'));
+  $('panel-title').textContent = panel === 'txns' ? sheet.title : 'Settings';
+  $('panel-back').onclick = () => closePanel();
+  (panel === 'txns' ? viewSheet : viewSettings)(el);
 }
 function viewSettings(el) {
   el.append(h('button', { class: 'btn primary', onclick: () => connect() }, '+ Connect an account'));
@@ -1091,24 +895,15 @@ function viewSettings(el) {
         busy('Removing…');
         try { gotData(await api('/remove', { item_id: c.item_id })); renderPanel(); } catch (e) { toast(e.message); } finally { busy(null); }
       } }, 'Remove')))));
-  const cash = conns.flatMap((c) => (c.accounts || []).filter((a) => !isDebt(a)).map((a) => ({ ...a, institution: c.institution })));
-  if (cash.length) el.append(h('div', { class: 'card' }, h('h2', {}, 'Main accounts', h('span', {}, 'top of Overview')), cash.map((a) =>
-    h('label', { class: 'row tap' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, a.name, h('span', { class: 'mask' }, ' ' + (a.mask || ''))),
-      h('div', { class: 'sub' }, a.institution || '')),
-      h('input', { type: 'checkbox', class: 'switch', checked: isMain(a), onchange: (e) => {
-        const ids = new Set(cash.filter(isMain).map((x) => x.account_id));
-        e.target.checked ? ids.add(a.account_id) : ids.delete(a.account_id);
-        mainIds = [...ids]; store.set('main', mainIds); render();
-      } })))));
-  el.append(h('button', { class: 'btn', onclick: () => openPanel('loans') }, 'Loans (Aidvantage) ›'));
+  el.append(h('button', { class: 'btn', onclick: openRecurringList }, 'Recurring payments ›'));
   el.append(h('p', { class: 'muted', style: 'font-size:13px' }, 'Pulls the latest every time you open the app. Banks themselves update about 1–4 times a day.'));
   el.append(h('button', { class: 'btn danger', onclick: () => { closePanel(true); logout(); } }, 'Lock'));
 }
 
 // ---------- layout ----------
-const VIEWS = { overview: viewOverview, categories: viewCategories, merchants: viewMerchants, paidwith: viewPaidWith, graphs: viewGraphs };
+const VIEWS = { overview: viewHome, categories: viewCategories, merchants: viewMerchants, paidwith: viewPaidWith, graphs: viewGraphs };
 function renderChips() {
-  const box = $('conns'), conns = data ? data.connections : [];
+  const box = $('conns'), conns = cardConns();
   box.hidden = conns.length < 2;
   const opts = [['all', 'All']].concat(conns.map((c) => [c.item_id, c.institution || 'Bank']));
   const key = opts.map((o) => o.join(':')).join('|') + '#' + conn + conns.map((c) => !!(c.brand && c.brand.logo)).join('');
@@ -1121,7 +916,7 @@ function renderChips() {
 }
 function pickConn(id, dir) {
   if (id === conn) return;
-  const ids = ['all'].concat((data ? data.connections : []).map((c) => c.item_id));
+  const ids = ['all'].concat(cardConns().map((c) => c.item_id));
   dir = dir || (ids.indexOf(id) > ids.indexOf(conn) ? 'l' : 'r');
   conn = connBy[view] = id; store.set('connBy', connBy); open.clear(); render('slide-' + dir);
 }
@@ -1162,10 +957,10 @@ $('view').addEventListener('touchstart', (e) => {
   touch = !edge || e.target.closest('.agrid-wrap.editing, .editing') ? null : { x, y: e.touches[0].clientY, edge };
 }, { passive: true });
 $('view').addEventListener('touchend', (e) => {
-  if (!touch || !data || data.connections.length < 2) return;
+  if (!touch || cardConns().length < 2) return;
   const touch0 = touch, dx = e.changedTouches[0].clientX - touch.x, dy = e.changedTouches[0].clientY - touch.y; touch = null;
   if (Math.abs(dx) < innerWidth * 0.4 || Math.abs(dx) < Math.abs(dy) * 1.5 || (touch0.edge === 'l') !== dx > 0) return;
-  const ids = ['all'].concat(data.connections.map((c) => c.item_id)), i = ids.indexOf(conn) + (dx < 0 ? 1 : -1);
+  const ids = ['all'].concat(cardConns().map((c) => c.item_id)), i = ids.indexOf(conn) + (dx < 0 ? 1 : -1);
   if (i >= 0 && i < ids.length) pickConn(ids[i], dx < 0 ? 'l' : 'r');
 }, { passive: true });
 
