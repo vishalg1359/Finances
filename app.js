@@ -400,6 +400,7 @@ function updatedLine() {
   return h('div', { class: 'updated' }, l.map((c) => (l.length > 1 || conn === 'all' ? (c.institution || 'Bank') + ' updated ' : 'Updated ') + whenText(c.updated)).join(' · '));
 }
 function noData(el) {
+  if (!data) { el.append(h('div', { class: 'empty' }, h('p', {}, 'Loading your cards…'))); return; }
   el.append(h('div', { class: 'empty' }, h('div', { class: 'empty-icon' }, '$'),
     h('button', { class: 'btn primary', onclick: () => connect() }, 'Connect an account')));
 }
